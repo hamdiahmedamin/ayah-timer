@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ayah Timer</title>
+<meta name="description" content="أداة لتوقيت آيات تلاوة سورة كاملة وتصدير ملف JSON بصيغة mp3quran (ayat_timing).">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23286656'/%3E%3Cpath d='M6 20v-8M10 23V9M14 18v-4M18 25V7M22 21v-10M26 17v-2' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=Amiri+Quran&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f6f3ea; --panel: #fffdf7; --ink: #1d2422; --muted: #5d6b67;
+  --line: #e1dccd; --accent: #286656; --accent-ink: #fff; --soft: #e3efe9;
+  --wave: #9bb8ae; --wave-played: #286656; --mark: #c2410c; --now: #d4a017;
+  --verse: rgba(40,102,86,.10); --danger: #b42318;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111615; --panel: #182020; --ink: #e7ece9; --muted: #9aa9a4;
+    --line: #2a3533; --accent: #7fd1b9; --accent-ink: #0d1514; --soft: #1f2c29;
+    --wave: #3f5853; --wave-played: #7fd1b9; --mark: #f08a5d; --now: #e8c25a;
+    --verse: rgba(127,209,185,.10); --danger: #f97066;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111615; --panel: #182020; --ink: #e7ece9; --muted: #9aa9a4;
+  --line: #2a3533; --accent: #7fd1b9; --accent-ink: #0d1514; --soft: #1f2c29;
+  --wave: #3f5853; --wave-played: #7fd1b9; --mark: #f08a5d; --now: #e8c25a;
+  --verse: rgba(127,209,185,.10); --danger: #f97066;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 15px/1.6 "IBM Plex Sans Arabic", system-ui, sans-serif;
+}
+main { max-width: 1100px; margin: 0 auto; padding: 18px 16px 60px; }
+header.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+header.top h1 { font-size: 22px; margin: 0; }
+header.top p { margin: 0; color: var(--muted); font-size: 13px; flex: 1 1 260px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+.panel h2 { font-size: 15px; margin: 0 0 10px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.grow { flex: 1 1 200px; min-width: 0; }
+label.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+input, select, textarea, button {
+  font: inherit; color: inherit; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg); padding: 8px 10px; min-height: 40px;
+}
+input[type="number"] { width: 90px; }
+input[type="file"] { padding: 6px; }
+button { cursor: pointer; background: var(--soft); border-color: transparent; font-weight: 600; }
+button.primary { background: var(--accent); color: var(--accent-ink); }
+button.ghost { background: transparent; border-color: var(--line); }
+button:disabled { opacity: .45; cursor: default; }
+button.big { min-height: 52px; padding: 0 22px; font-size: 17px; }
+.tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.status { font-size: 13px; color: var(--muted); }
+.status.err { color: var(--danger); }
+.verse-now {
+  font-family: "Amiri Quran", "IBM Plex Sans Arabic", serif; font-size: 24px; line-height: 2.1;
+  min-height: 56px; text-align: center; padding: 6px 8px; border-radius: 10px; background: var(--soft);
+}
+.badge { display: inline-block; background: var(--soft); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+.transport { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.clock { font-variant-numeric: tabular-nums; direction: ltr; min-width: 130px; text-align: center; font-weight: 600; }
+kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; background: var(--bg); }
+.keys { color: var(--muted); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; }
+.split { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 900px) { .split { grid-template-columns: 1.15fr .85fr; } }
+textarea { width: 100%; min-height: 150px; direction: ltr; font: 12px/1.5 ui-monospace, monospace; }
+.hidden { display: none !important; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <ayah-timer></ayah-timer>
+</main>
+
+<script>
+// Verse counts per surah: Hafs (Kufan count) and the Madani count used by
+// Warsh and Qalun, from the Tanzil and King Fahd Complex (Quranpedia) texts.
+const COUNTS = {
+  hafs: [7,286,200,176,120,165,206,75,129,109,123,111,43,52,99,128,111,110,98,135,112,78,118,64,77,227,93,88,69,60,34,30,73,54,45,83,182,88,75,85,54,53,89,59,37,35,38,29,18,45,60,49,62,55,78,96,29,22,24,13,14,11,11,18,12,12,30,52,52,44,28,28,20,56,40,31,50,40,46,42,29,19,36,25,22,17,19,26,30,20,15,21,11,8,8,19,5,8,8,11,11,8,3,9,5,4,7,3,6,3,5,4,5,6],
+  madani: [7,285,200,175,122,167,206,76,130,109,121,111,44,54,99,128,110,105,99,134,111,76,119,62,77,226,95,88,69,59,33,30,73,54,46,82,182,86,72,84,53,50,89,56,36,34,39,29,18,45,60,47,61,55,77,99,28,21,24,13,14,11,11,18,12,12,31,52,52,44,30,28,18,55,39,31,50,40,45,42,29,19,36,25,22,17,19,26,32,20,15,21,11,8,8,20,5,8,9,11,10,8,3,9,5,5,6,3,6,3,5,4,5,6],
+};
+const SURAHS = ["الفاتحة","البقرة","آل عمران","النساء","المائدة","الأنعام","الأعراف","الأنفال","التوبة","يونس","هود","يوسف","الرعد","إبراهيم","الحجر","النحل","الإسراء","الكهف","مريم","طه","الأنبياء","الحج","المؤمنون","النور","الفرقان","الشعراء","النمل","القصص","العنكبوت","الروم","لقمان","السجدة","الأحزاب","سبأ","فاطر","يس","الصافات","ص","الزمر","غافر","فصلت","الشورى","الزخرف","الدخان","الجاثية","الأحقاف","محمد","الفتح","الحجرات","ق","الذاريات","الطور","النجم","القمر","الرحمن","الواقعة","الحديد","المجادلة","الحشر","الممتحنة","الصف","الجمعة","المنافقون","التغابن","الطلاق","التحريم","الملك","القلم","الحاقة","المعارج","نوح","الجن","المزمل","المدثر","القيامة","الإنسان","المرسلات","النبأ","النازعات","عبس","التكوير","الانفطار","المطففين","الانشقاق","البروج","الطارق","الأعلى","الغاشية","الفجر","البلد","الشمس","الليل","الضحى","الشرح","التين","العلق","القدر","البينة","الزلزلة","العاديات","القارعة","التكاثر","العصر","الهمزة","الفيل","قريش","الماعون","الكوثر","الكافرون","النصر","المسد","الإخلاص","الفلق","الناس"];
+const API = 'https://www.mp3quran.net/api/v3';
+
+const fmt = (ms) => {
+  if (ms == null || !isFinite(ms)) return '–';
+  const s = Math.max(0, ms) / 1000, m = Math.floor(s / 60);
+  return `${m}:${(s - m * 60).toFixed(2).padStart(5, '0')}`;
+};
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else if (v === true) n.setAttribute(k, '');
+    else if (v !== false && v != null) n.setAttribute(k, v);
+  }
+  n.append(...kids.flat().filter((k) => k != null));
+  return n;
+};
+
+/* ------------------------------------------------------------------ */
+/* <wave-view>: the waveform, the verse marks, the play head.          */
+/* Click to seek; drag a mark to move a verse start; wheel/zoom to     */
+/* look closer. Fires `seek` {ms} and `markmove` {ayah, ms}.           */
+/* ------------------------------------------------------------------ */
+class WaveView extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).innerHTML = `
+      <style>
+        :host { display: block; }
+        .wrap { position: relative; overflow-x: auto; overflow-y: hidden; border-radius: 10px;
+                background: var(--bg); border: 1px solid var(--line); direction: ltr; }
+        canvas { display: block; height: 150px; touch-action: none; cursor: pointer; }
+        .bar { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
+        input { flex: 1; }
+      </style>
+      <div class="wrap"><canvas></canvas></div>
+      <div class="bar">تكبير <input type="range" min="1" max="60" value="1" step="1"> <span class="z">×1</span>
+        <label><input type="checkbox" checked class="follow" style="flex:none"> متابعة رأس التشغيل</label></div>`;
+    this.canvas = this.shadowRoot.querySelector('canvas');
+    this.wrap = this.shadowRoot.querySelector('.wrap');
+    this.zoomInput = this.shadowRoot.querySelector('input[type=range]');
+    this.followBox = this.shadowRoot.querySelector('.follow');
+    this.peaks = null; this.duration = 0; this.starts = []; this.now = 0; this.current = -1;
+    this.zoom = 1; this.drag = null;
+    this.zoomInput.addEventListener('input', () => {
+      const keep = this.now;
+      this.zoom = +this.zoomInput.value;
+      this.shadowRoot.querySelector('.z').textContent = '×' + this.zoom;
+      this.draw(); this.reveal(keep, true);
+    });
+    new ResizeObserver(() => this.draw()).observe(this.wrap);
+    this.canvas.addEventListener('pointerdown', (e) => this.down(e));
+    this.canvas.addEventListener('pointermove', (e) => this.move(e));
+    this.canvas.addEventListener('pointerup', (e) => this.up(e));
+  }
+  set data({ peaks, duration }) {
+    this.peaks = peaks; this.duration = duration;
+    // About 45 seconds a screen, so verse marks stay apart.
+    this.zoom = Math.max(1, Math.min(60, Math.round(duration / 45000)));
+    this.zoomInput.value = this.zoom;
+    this.shadowRoot.querySelector('.z').textContent = '×' + this.zoom;
+    this.draw();
+  }
+  update({ starts, now, current }) {
+    if (starts) this.starts = starts;
+    if (now != null) this.now = now;
+    if (current != null) this.current = current;
+    this.draw();
+    if (this.followBox.checked && !this.drag) this.reveal(this.now);
+  }
+  width() { return Math.max(this.wrap.clientWidth, 10) * this.zoom; }
+  xOf(ms) { return this.duration ? (ms / this.duration) * this.width() : 0; }
+  msOf(x) { return Math.max(0, Math.min(this.duration, (x / this.width()) * this.duration)); }
+  reveal(ms, center) {
+    const x = this.xOf(ms), view = this.wrap.clientWidth, left = this.wrap.scrollLeft;
+    if (center || x < left + view * .1 || x > left + view * .85) this.wrap.scrollLeft = x - view * .35;
+  }
+  localX(e) { return e.clientX - this.canvas.getBoundingClientRect().left; }
+  hit(x) {
+    let best = null, bestD = 7;
+    this.starts.forEach((ms, a) => {
+      if (a < 1 || ms == null) return;
+      const d = Math.abs(this.xOf(ms) - x);
+      if (d < bestD) { best = a; bestD = d; }
+    });
+    return best;
+  }
+  down(e) {
+    const x = this.localX(e), a = this.hit(x);
+    if (a != null) { this.drag = { ayah: a }; this.canvas.setPointerCapture(e.pointerId); }
+    else this.dispatchEvent(new CustomEvent('seek', { detail: { ms: this.msOf(x) } }));
+  }
+  move(e) {
+    const x = this.localX(e);
+    this.canvas.style.cursor = this.drag || this.hit(x) != null ? 'ew-resize' : 'pointer';
+    if (!this.drag) return;
+    this.dispatchEvent(new CustomEvent('markmove', { detail: { ayah: this.drag.ayah, ms: Math.round(this.msOf(x)) } }));
+  }
+  up() { this.drag = null; }
+  draw() {
+    const c = this.canvas, w = this.width(), h = 150, dpr = devicePixelRatio || 1;
+    c.style.width = w + 'px'; c.width = Math.round(w * dpr); c.height = h * dpr;
+    const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    const css = getComputedStyle(this);
+    const color = (v) => css.getPropertyValue(v).trim();
+    if (!this.peaks) {
+      g.fillStyle = color('--muted'); g.font = '13px sans-serif'; g.textAlign = 'center';
+      g.fillText('حمّل تلاوة لرسم موجتها', w / 2, h / 2); return;
+    }
+    // The verse being recited, shaded.
+    const s = this.starts, cur = this.current;
+    if (cur >= 0) {
+      const a = cur === 0 ? 0 : s[cur], b = s.slice(cur + 1).find((v) => v != null) ?? this.duration;
+      g.fillStyle = color('--verse'); g.fillRect(this.xOf(a), 0, this.xOf(b) - this.xOf(a), h);
+    }
+    const n = this.peaks.length, played = this.xOf(this.now), mid = h / 2;
+    for (let x = 0; x < w; x++) {
+      const i = Math.min(n - 1, Math.floor((x / w) * n));
+      const v = this.peaks[i] * (h * .46);
+      g.fillStyle = x < played ? color('--wave-played') : color('--wave');
+      g.fillRect(x, mid - v, 1, Math.max(1, v * 2));
+    }
+    g.font = '600 11px sans-serif'; g.textAlign = 'left';
+    s.forEach((ms, a) => {
+      if (a < 1 || ms == null) return;
+      const x = this.xOf(ms);
+      g.fillStyle = color('--mark'); g.fillRect(x - 1, 0, 2, h);
+      g.fillRect(x - 1, 0, 22, 15);
+      g.fillStyle = '#fff'; g.fillText(String(a), x + 2, 11);
+    });
+    g.fillStyle = color('--now'); g.fillRect(played - 1, 0, 2, h);
+  }
+}
+customElements.define('wave-view', WaveView);
+
+/* ------------------------------------------------------------------ */
+/* <ayah-table>: one row per verse with its start and end, and the      */
+/* tools to play it, set it to the play head, nudge or clear it.        */
+/* Fires `play` {ayah}, `set` {ayah}, `nudge` {ayah, by}, `edit`        */
+/* {ayah, ms}, `clear` {ayah}.                                          */
+/* ------------------------------------------------------------------ */
+class AyahTable extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).innerHTML = `
+      <style>
+        :host { display: block; }
+        .scroll { max-height: 520px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
+        th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; z-index: 1; }
+        tr.now td { background: var(--verse); }
+        tr.missing td.t { color: var(--danger); }
+        td.t { direction: ltr; font-variant-numeric: tabular-nums; }
+        input { width: 86px; direction: ltr; font: inherit; padding: 3px 5px; border-radius: 7px;
+                border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+        button { font: inherit; font-size: 12px; border: 0; border-radius: 7px; padding: 4px 7px; margin: 0 1px;
+                 background: var(--soft); color: var(--ink); cursor: pointer; }
+        button:disabled { opacity: .35; cursor: default; }
+      </style>
+      <div class="scroll"><table><thead><tr>
+        <th>الآية</th><th>البداية (ms)</th><th>النهاية</th><th>المدة</th><th></th>
+      </tr></thead><tbody></tbody></table></div>`;
+    this.body = this.shadowRoot.querySelector('tbody');
+    this.rows = [];
+    this.body.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      const ayah = +b.closest('tr').dataset.ayah;
+      this.dispatchEvent(new CustomEvent(b.dataset.act, { detail: { ayah, by: +(b.dataset.by || 0) } }));
+    });
+    this.body.addEventListener('change', (e) => {
+      if (e.target.tagName !== 'INPUT') return;
+      const ayah = +e.target.closest('tr').dataset.ayah, v = e.target.value.trim();
+      this.dispatchEvent(new CustomEvent('edit', { detail: { ayah, ms: v === '' ? null : Math.round(+v) } }));
+    });
+  }
+  render({ count, timeline, current }) {
+    if (this.rows.length !== count + 1) {
+      this.body.replaceChildren(...Array.from({ length: count + 1 }, (_, a) => {
+        const tr = el('tr', { 'data-ayah': a },
+          el('td', {}, a === 0 ? 'الافتتاح' : String(a)),
+          el('td', {}, a === 0 ? el('span', {}, '0') : el('input', { type: 'number', min: 0, step: 10 })),
+          el('td', { class: 't' }), el('td', { class: 't' }),
+          el('td', {},
+            el('button', { 'data-act': 'play', title: 'تشغيل الآية' }, '▶'),
+            a === 0 ? null : el('button', { 'data-act': 'set', title: 'البداية = موضع التشغيل' }, '⌖'),
+            a === 0 ? null : el('button', { 'data-act': 'nudge', 'data-by': -100, title: '−100ms' }, '−'),
+            a === 0 ? null : el('button', { 'data-act': 'nudge', 'data-by': 100, title: '+100ms' }, '+'),
+            a === 0 ? null : el('button', { 'data-act': 'clear', title: 'مسح' }, '✕')));
+        return tr;
+      }));
+      this.rows = [...this.body.children];
+    }
+    timeline.forEach((t, a) => {
+      const tr = this.rows[a]; if (!tr) return;
+      const input = tr.querySelector('input');
+      if (input && this.shadowRoot.activeElement !== input) {
+        input.value = t.start ?? '';
+      }
+      tr.cells[2].textContent = fmt(t.end);
+      tr.cells[3].textContent = t.start != null && t.end != null ? ((t.end - t.start) / 1000).toFixed(1) + 's' : '–';
+      tr.classList.toggle('missing', a > 0 && t.start == null);
+      tr.classList.toggle('now', a === current);
+    });
+  }
+  scrollTo(a) { this.rows[a]?.scrollIntoView({ block: 'nearest' }); }
+}
+customElements.define('ayah-table', AyahTable);
+
+/* ------------------------------------------------------------------ */
+/* <ayah-timer>: the app.                                               */
+/* ------------------------------------------------------------------ */
+class AyahTimer extends HTMLElement {
+  connectedCallback() {
+    this.state = {
+      surah: 1, counting: 'hafs', starts: [0], duration: 0, label: '',
+      source: 'mp3quran', reaction: 250, snap: true, texts: null,
+    };
+    this.audio = new Audio(); this.audio.preload = 'auto';
+    this.energy = null;
+    this.build();
+    this.audio.addEventListener('timeupdate', () => this.tick());
+    this.audio.addEventListener('play', () => this.loop());
+    this.audio.addEventListener('pause', () => this.refresh());
+    this.audio.addEventListener('loadedmetadata', () => {
+      this.state.duration = Math.round(this.audio.duration * 1000); this.refresh();
+    });
+    document.addEventListener('keydown', (e) => this.key(e));
+    this.loadReciters();
+    this.setSurah(1);
+  }
+
+  /* ---- layout ---- */
+  build() {
+    const $ = (id) => this.querySelector('#' + id);
+    this.innerHTML = `
+      <header class="top">
+        <h1>مؤقِّت الآيات</h1>
+        <p>حمّل تلاوة سورة كاملة، وعلِّم بداية كل آية أثناء الاستماع أو بالاقتراح التلقائي، ثم صدِّر ملف JSON بصيغة <span dir="ltr">mp3quran ayat_timing</span>.</p>
+        <button class="ghost" id="theme" title="الوضع الفاتح/الداكن">فاتح/داكن</button>
+      </header>
+
+      <section class="panel">
+        <h2>١. التلاوة والسورة</h2>
+        <div class="tabs" role="tablist">
+          <button role="tab" data-src="mp3quran" aria-selected="true">من mp3quran</button>
+          <button role="tab" data-src="file">ملف من جهازك</button>
+          <button role="tab" data-src="url">رابط</button>
+        </div>
+        <div class="row" data-pane="mp3quran">
+          <label class="field grow">القارئ <select id="reciter"><option>جارٍ التحميل…</option></select></label>
+          <label class="field grow">المصحف/الرواية <select id="moshaf"></select></label>
+        </div>
+        <div class="row hidden" data-pane="file">
+          <input type="file" id="file" accept="audio/*" class="grow">
+        </div>
+        <div class="row hidden" data-pane="url">
+          <input id="url" class="grow" placeholder="https://…/001.mp3" dir="ltr">
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="field">السورة <select id="surah"></select></label>
+          <label class="field">العدّ <select id="counting">
+            <option value="hafs">الكوفي (حفص، شعبة)</option>
+            <option value="madani">المدني (ورش، قالون)</option>
+          </select></label>
+          <span class="badge" id="count"></span>
+          <button class="primary" id="load">تحميل التلاوة</button>
+          <span class="status" id="status"></span>
+        </div>
+        <p class="hint">العدّ يحدد عدد الآيات. يُضبط تلقائيًا من رواية mp3quran، ويمكن تغييره.</p>
+      </section>
+
+      <section class="panel">
+        <h2>٢. الاستماع والتعليم</h2>
+        <div class="verse-now" id="verseNow">—</div>
+        <wave-view id="wave" style="margin-top:10px"></wave-view>
+        <div class="transport" style="margin-top:10px">
+          <button class="big primary" id="mark" title="Space">علِّم الآية التالية ⏎</button>
+          <button id="play" title="P">▶ تشغيل</button>
+          <button id="back" title="←">−٥ث</button>
+          <button id="fwd" title="→">+٥ث</button>
+          <span class="clock" id="clock">0:00.00 / 0:00.00</span>
+          <label class="field">السرعة <select id="rate">
+            <option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option>
+          </select></label>
+          <label class="field">تأخّر الضغط (ms) <input type="number" id="reaction" value="250" step="50" min="0"></label>
+          <label class="field" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="snap" checked style="min-height:auto"> التصاق بأقرب سكتة</label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="auto" title="يملأ الآيات غير المعلَّمة من سكتات التلاوة وطول الآيات، ويُبقي ما علَّمته">✨ اقتراح تلقائي</button>
+          <button id="undo" title="Z">↶ تراجع عن آخر علامة</button>
+          <button class="ghost" id="reset">مسح كل العلامات</button>
+          <span class="status" id="progress"></span>
+        </div>
+        <div class="keys">
+          <span><kbd>Space</kbd> علِّم الآية التالية</span><span><kbd>P</kbd> تشغيل/إيقاف</span>
+          <span><kbd>←</kbd><kbd>→</kbd> ٥ ثوانٍ</span><span><kbd>Z</kbd> تراجع</span>
+          <span>اسحب العلامة على الموجة لتعديلها، وانقر الموجة للانتقال.</span>
+          <span>في السور الطويلة: علِّم آية كل بضع صفحات يدويًا ثم اضغط «اقتراح تلقائي» ليملأ ما بينها.</span>
+        </div>
+      </section>
+
+      <div class="split">
+        <section class="panel">
+          <h2>٣. الآيات</h2>
+          <ayah-table id="table"></ayah-table>
+        </section>
+        <section class="panel">
+          <h2>٤. الاستيراد والتصدير</h2>
+          <div class="row">
+            <button class="primary" id="download">⬇ تنزيل JSON</button>
+            <button id="copy">نسخ</button>
+            <label class="field" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="full" checked style="min-height:auto"> حقول mp3quran الكاملة</label>
+          </div>
+          <textarea id="json" spellcheck="false" placeholder="[ { &quot;ayah&quot;: 0, &quot;start_time&quot;: 0, &quot;end_time&quot;: … } ]"></textarea>
+          <div class="row" style="margin-top:8px">
+            <button id="import">استيراد من النص أعلاه</button>
+            <input type="file" id="importFile" accept=".json,application/json" class="grow">
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button id="fetchTiming">جلب توقيت mp3quran لهذه التلاوة (إن وُجد)</button>
+          </div>
+          <p class="hint">الصيغة: مصفوفة بعناصر <span dir="ltr">{ayah, start_time, end_time}</span> بالمللي ثانية. الآية 0 هي ما قبل الآية الأولى (الاستعاذة والبسملة). يُحفظ عملك في هذا المتصفح تلقائيًا.</p>
+        </section>
+      </div>
+      <p class="hint">النص المعروض: رواية حفص من <a href="https://alquran.cloud" target="_blank" rel="noopener">alquran.cloud</a>. التلاوات والتوقيتات من <a href="https://www.mp3quran.net" target="_blank" rel="noopener">mp3quran.net</a>.</p>`;
+    this.$ = $;
+    this.wave = $('wave'); this.table = $('table');
+    $('surah').append(...SURAHS.map((n, i) => el('option', { value: i + 1 }, `${i + 1}. ${n}`)));
+    this.querySelectorAll('[role=tab]').forEach((b) => b.addEventListener('click', () => this.setSource(b.dataset.src)));
+    $('surah').addEventListener('change', (e) => this.setSurah(+e.target.value));
+    $('counting').addEventListener('change', (e) => { this.state.counting = e.target.value; this.restore(); });
+    $('reciter').addEventListener('change', () => this.fillMoshaf());
+    $('moshaf').addEventListener('change', () => this.pickedMoshaf());
+    $('load').addEventListener('click', () => this.load());
+    $('file').addEventListener('change', () => this.load());
+    $('mark').addEventListener('click', () => this.mark());
+    $('play').addEventListener('click', () => this.toggle());
+    $('back').addEventListener('click', () => this.seek(this.nowMs() - 5000));
+    $('fwd').addEventListener('click', () => this.seek(this.nowMs() + 5000));
+    $('rate').addEventListener('change', (e) => { this.audio.playbackRate = +e.target.value; });
+    $('reaction').addEventListener('change', (e) => { this.state.reaction = Math.max(0, +e.target.value || 0); });
+    $('snap').addEventListener('change', (e) => { this.state.snap = e.target.checked; });
+    $('auto').addEventListener('click', () => this.auto());
+    $('undo').addEventListener('click', () => this.undo());
+    $('reset').addEventListener('click', () => { if (confirmReset()) { this.state.starts = [0]; this.changed(); } });
+    $('download').addEventListener('click', () => this.download());
+    $('copy').addEventListener('click', () => navigator.clipboard.writeText(this.json()).then(() => this.say('نُسخ.')));
+    $('full').addEventListener('change', () => this.refresh());
+    $('import').addEventListener('click', () => this.importText($('json').value));
+    $('importFile').addEventListener('change', async (e) => {
+      const f = e.target.files[0]; if (f) this.importText(await f.text());
+    });
+    $('fetchTiming').addEventListener('click', () => this.fetchTiming());
+    $('theme').addEventListener('click', () => {
+      const r = document.documentElement, dark = r.dataset.theme
+        ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+      r.dataset.theme = dark ? 'light' : 'dark'; this.wave.draw();
+    });
+    this.wave.addEventListener('seek', (e) => this.seek(e.detail.ms));
+    this.wave.addEventListener('markmove', (e) => this.setStart(e.detail.ayah, e.detail.ms));
+    this.table.addEventListener('play', (e) => this.playAyah(e.detail.ayah));
+    this.table.addEventListener('set', (e) => this.setStart(e.detail.ayah, Math.round(this.nowMs())));
+    this.table.addEventListener('nudge', (e) => this.setStart(e.detail.ayah, (this.state.starts[e.detail.ayah] ?? 0) + e.detail.by));
+    this.table.addEventListener('edit', (e) => this.setStart(e.detail.ayah, e.detail.ms));
+    this.table.addEventListener('clear', (e) => this.setStart(e.detail.ayah, null));
+    function confirmReset() { return window.confirm('مسح كل العلامات لهذه السورة؟'); }
+  }
+
+  /* ---- sources ---- */
+  setSource(src) {
+    this.state.source = src;
+    this.querySelectorAll('[role=tab]').forEach((b) => b.setAttribute('aria-selected', b.dataset.src === src));
+    this.querySelectorAll('[data-pane]').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== src));
+  }
+  async loadReciters() {
+    try {
+      const [rec, reads] = await Promise.all([
+        fetch(`${API}/reciters?language=ar`).then((r) => r.json()),
+        fetch(`${API}/ayat_timing/reads`).then((r) => r.json()).catch(() => []),
+      ]);
+      this.reciters = rec.reciters.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+      const norm = (u) => u.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      this.timedReads = new Map(reads.map((r) => [norm(r.folder_url), r.id]));
+      this.norm = norm;
+      const sel = this.$('reciter');
+      sel.replaceChildren(...this.reciters.map((r, i) => el('option', { value: i }, r.name)));
+      const afasy = this.reciters.findIndex((r) => r.name.includes('العفاسي'));
+      sel.value = afasy >= 0 ? afasy : 0;
+      this.fillMoshaf();
+    } catch (err) {
+      this.$('reciter').replaceChildren(el('option', {}, 'تعذّر تحميل القرّاء'));
+      this.setSource('file');
+    }
+  }
+  fillMoshaf() {
+    const r = this.reciters?.[+this.$('reciter').value]; if (!r) return;
+    this.$('moshaf').replaceChildren(...r.moshaf.map((m, i) => {
+      const timed = this.timedReads.has(this.norm(m.server));
+      return el('option', { value: i }, `${m.name}${timed ? ' · له توقيت' : ''}`);
+    }));
+    this.pickedMoshaf();
+  }
+  moshaf() {
+    const r = this.reciters?.[+this.$('reciter').value];
+    return r?.moshaf[+this.$('moshaf').value];
+  }
+  pickedMoshaf() {
+    const m = this.moshaf(); if (!m) return;
+    const madani = /ورش|قالون/.test(m.name);
+    this.$('counting').value = madani ? 'madani' : 'hafs';
+    this.state.counting = this.$('counting').value;
+    const has = (m.surah_list || '').split(',').map(Number);
+    [...this.$('surah').options].forEach((o) => { o.disabled = !has.includes(+o.value); });
+    this.restore();
+  }
+  audioUrl() {
+    const s = String(this.state.surah).padStart(3, '0');
+    if (this.state.source === 'mp3quran') {
+      const m = this.moshaf(); return m ? `${m.server}${s}.mp3` : null;
+    }
+    if (this.state.source === 'url') return this.$('url').value.trim() || null;
+    return null;
+  }
+  async load() {
+    this.audio.pause();
+    let blob, label;
+    try {
+      if (this.state.source === 'file') {
+        const f = this.$('file').files[0]; if (!f) return this.say('اختر ملفًا صوتيًا.', true);
+        blob = f; label = f.name;
+      } else {
+        const url = this.audioUrl(); if (!url) return this.say('لا يوجد رابط.', true);
+        this.say('جارٍ تنزيل التلاوة…');
+        const res = await fetch(url); if (!res.ok) throw new Error(res.status);
+        blob = await res.blob(); label = url;
+      }
+      this.state.label = label;
+      this.audio.src = URL.createObjectURL(blob);
+      this.audio.playbackRate = +this.$('rate').value;
+      this.say('جارٍ تحليل الصوت…');
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+      ctx.close();
+      this.analyse(buf);
+      this.state.duration = Math.round(buf.duration * 1000);
+      this.wave.data = { peaks: this.peaks, duration: this.state.duration };
+      this.restore();
+      this.say(`جاهز · ${fmt(this.state.duration)}`);
+    } catch (err) {
+      this.say('تعذّر تحميل التلاوة: ' + err.message, true);
+    }
+  }
+  // Peaks for the drawing, and loudness every 10 ms for finding pauses.
+  analyse(buf) {
+    const data = buf.getChannelData(0), rate = buf.sampleRate;
+    const P = 6000, step = Math.max(1, Math.floor(data.length / P)), peaks = new Float32Array(P);
+    for (let i = 0; i < P; i++) {
+      let m = 0; const end = Math.min(data.length, (i + 1) * step);
+      for (let j = i * step; j < end; j += 4) { const v = Math.abs(data[j]); if (v > m) m = v; }
+      peaks[i] = m;
+    }
+    const top = Math.max(...peaks) || 1;
+    this.peaks = peaks.map((p) => p / top);
+    const win = Math.round(rate / 100), E = new Float32Array(Math.floor(data.length / win));
+    for (let i = 0; i < E.length; i++) {
+      let s = 0; for (let j = i * win; j < (i + 1) * win; j += 2) s += data[j] * data[j];
+      E[i] = Math.sqrt(s / (win / 2));
+    }
+    this.energy = E;
+  }
+
+  /* ---- surah and saved work ---- */
+  count() { return COUNTS[this.state.counting][this.state.surah - 1]; }
+  // Work is saved per recording, surah and count.
+  storeKey() {
+    const src = this.state.source === 'file' ? this.state.label : this.audioUrl();
+    return `ayah-timer:${src || ''}:${this.state.surah}:${this.state.counting}`;
+  }
+  setSurah(n) {
+    this.state.surah = n; this.$('surah').value = n;
+    this.state.texts = null; this.loadText(); this.restore();
+  }
+  restore() {
+    this.$('count').textContent = `${this.count()} آية`;
+    try { this.state.starts = JSON.parse(localStorage.getItem(this.storeKey())) || [0]; }
+    catch { this.state.starts = [0]; }
+    this.state.starts.length = Math.min(this.state.starts.length, this.count() + 1);
+    this.refresh();
+  }
+  changed() {
+    try { localStorage.setItem(this.storeKey(), JSON.stringify(this.state.starts)); } catch {}
+    this.refresh();
+  }
+  async loadText() {
+    const surah = this.state.surah;
+    try {
+      const r = await fetch(`https://api.alquran.cloud/v1/surah/${surah}/quran-uthmani`).then((x) => x.json());
+      if (surah === this.state.surah) { this.state.texts = r.data.ayahs.map((a) => a.text); this.refresh(); }
+    } catch {}
+  }
+
+  /* ---- timing ---- */
+  nowMs() { return this.audio.currentTime * 1000; }
+  seek(ms) {
+    if (!this.state.duration) return;
+    this.audio.currentTime = Math.max(0, Math.min(this.state.duration, ms)) / 1000; this.refresh();
+  }
+  toggle() { if (!this.audio.src) return; this.audio.paused ? this.audio.play() : this.audio.pause(); }
+  loop() {
+    const step = () => { this.tick(); if (!this.audio.paused) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }
+  // The quietest moment near [ms], within [range] ms: verses start after pauses.
+  snapTo(ms, range = 600) {
+    if (!this.energy) return ms;
+    const E = this.energy, at = Math.round(ms / 10), r = Math.round(range / 10);
+    let best = at, low = Infinity;
+    for (let i = Math.max(0, at - r); i <= Math.min(E.length - 1, at + r); i++) {
+      if (E[i] < low) { low = E[i]; best = i; }
+    }
+    // Then forward to where the voice comes back.
+    let j = best; const back = low * 3 + 0.01;
+    while (j < E.length - 1 && j < best + 80 && E[j] < back) j++;
+    return Math.max(0, j * 10 - 60);
+  }
+  nextUnmarked() {
+    const s = this.state.starts;
+    for (let a = 1; a <= this.count(); a++) if (s[a] == null) return a;
+    return null;
+  }
+  mark() {
+    if (!this.state.duration) return;
+    const a = this.nextUnmarked(); if (a == null) return this.say('عُلِّمت كل الآيات.');
+    let ms = Math.max(0, this.nowMs() - this.state.reaction);
+    if (this.state.snap) ms = this.snapTo(ms);
+    const prev = this.state.starts.slice(0, a).filter((v) => v != null).pop() ?? 0;
+    this.setStart(a, Math.max(ms, prev + 50));
+    this.table.scrollTo(a);
+  }
+  undo() {
+    const s = this.state.starts;
+    for (let a = s.length - 1; a >= 1; a--) if (s[a] != null) { s[a] = null; break; }
+    while (s.length > 1 && s[s.length - 1] == null) s.pop();
+    this.changed();
+  }
+  setStart(a, ms) {
+    if (a < 1 || a > this.count()) return;
+    const s = this.state.starts;
+    while (s.length <= a) s.push(null);
+    s[a] = ms == null ? null : Math.max(0, Math.min(this.state.duration || Infinity, Math.round(ms)));
+    while (s.length > 1 && s[s.length - 1] == null) s.pop();
+    this.changed();
+  }
+  playAyah(a) {
+    const t = this.timeline()[a]; if (!t || t.start == null) return;
+    this.seek(t.start); this.audio.play();
+    const end = t.end;
+    const stop = () => { if (this.nowMs() >= end - 30) { this.audio.pause(); this.audio.removeEventListener('timeupdate', stop); } };
+    this.audio.addEventListener('timeupdate', stop);
+  }
+  // The pauses in the recording: where the voice drops for 120 ms or more,
+  // with the moment it comes back (a verse starts there) and how long it was.
+  pauses() {
+    const E = this.energy;
+    const sorted = Float32Array.from(E).sort();
+    const floor = sorted[Math.floor(sorted.length * .2)], voice = sorted[Math.floor(sorted.length * .7)];
+    const quiet = floor + (voice - floor) * .18;
+    const gaps = [];
+    let i = 0, lastVoice = 0;
+    while (i < E.length) {
+      if (E[i] < quiet) {
+        let j = i; while (j < E.length && E[j] < quiet) j++;
+        if (j - i >= 12 && j < E.length - 5) gaps.push({ len: (j - i) * 10, at: Math.max(0, j * 10 - 60) });
+        i = j;
+      } else { lastVoice = i; i++; }
+    }
+    return { gaps, end: lastVoice * 10 };
+  }
+  // The letters of each verse (marks dropped), to expect how long it takes.
+  verseLengths() {
+    const texts = this.state.texts;
+    if (!texts || this.state.counting !== 'hafs' || texts.length !== this.count()) return null;
+    const letters = (t) => t.replace(/[^ء-يٱ]/g, '').length;
+    return texts.map((t, i) => {
+      // The text puts the basmala before verse 1 (but in al-Fatiha it is verse 1).
+      if (i === 0 && this.state.surah !== 1 && this.state.surah !== 9 && t.startsWith('بِسْمِ')) {
+        t = t.split(' ').slice(4).join(' ');
+      }
+      return Math.max(4, letters(t));
+    });
+  }
+  // A first draft. With the text: of all the pauses, the set whose verses
+  // best match their expected lengths, longer pauses preferred (a dynamic
+  // programme, so one misleading mid-verse pause does not shift the rest).
+  // Without it (the Madani count has no text here): the longest pauses.
+  auto() {
+    if (!this.energy) return this.say('حمّل التلاوة أولًا.', true);
+    const n = this.count(), { gaps, end } = this.pauses();
+    const lens = this.verseLengths();
+    if (!lens) {
+      const picked = [...gaps].sort((a, b) => b.len - a.len).slice(0, n).sort((a, b) => a.at - b.at);
+      if (picked.length < n) this.say(`وُجدت ${picked.length} سكتة فقط لـ ${n} آية: أكمل يدويًا.`, true);
+      this.state.starts = [0, ...picked.map((g) => g.at)];
+      return this.changed();
+    }
+    // Verses already marked by hand stay where they are: each becomes a pause
+    // of its own that only its verse may start at.
+    const fixed = this.state.starts.map((ms, a) => (a >= 1 && a <= n && ms != null ? ms : null));
+    const points = [
+      ...gaps.map((g) => ({ at: g.at, reward: Math.log(1 + g.len / 100), verse: 0 })),
+      ...fixed.flatMap((ms, a) => (ms == null ? [] : [{ at: ms, reward: 0, verse: a }])),
+    ].sort((a, b) => a.at - b.at);
+    const t = points.map((p) => p.at), reward = points.map((p) => p.reward);
+    const only = (verse) => fixed[verse] == null
+      ? (k) => points[k].verse === 0
+      : (k) => points[k].verse === verse;
+    const K = t.length, total = lens.reduce((a, b) => a + b, 0);
+    if (K < n) return this.say(`وُجدت ${K} سكتة فقط لـ ${n} آية: علِّم يدويًا.`, true);
+    let rate = end / (total + 20); // ms per letter; the opening about 20
+    let best = null;
+    for (let pass = 0; pass < 2; pass++) {
+      const exp = lens.map((l) => l * rate);
+      const cost = (dur, e) => { const r = Math.log(Math.max(dur, 50) / e); return r * r; };
+      // Weight of a pause's length against fitting the verse lengths, and the
+      // opening's expected letters (the basmala): checked against mp3quran's own
+      // timings (Yasin 80/83 verses within 0.5 s, al-Mulk 28/30 within 1 s).
+      // ponytail: long surahs with many waqf pauses (al-Kahf) still go astray
+      // alone; a few verses marked by hand keep the draft on track.
+      const L = 0.45;
+      // dp[a][k]: verse a+1 starts at pause k; from[a][k]: where verse a started.
+      let dp = new Float64Array(K).fill(Infinity);
+      const from = [];
+      // The opening (isti'adha and basmala, about 40 letters) is short too.
+      const opening = 20 * rate;
+      const first = only(1);
+      for (let k = 0; k < K; k++) {
+        if (first(k) && (t[k] < end * .6 || fixed[1] != null)) dp[k] = cost(t[k], opening) - L * reward[k];
+      }
+      from.push(null);
+      for (let a = 1; a < n; a++) {
+        const next = new Float64Array(K).fill(Infinity), back = new Int32Array(K).fill(-1);
+        const e = exp[a - 1], lo = Math.max(250, e * .25), hi = e * 4 + 1500;
+        // Near a hand-marked verse the lengths may be off: allow any span.
+        const free = fixed[a] != null || fixed[a + 1] != null;
+        const allowed = only(a + 1);
+        let j0 = 0;
+        for (let k = 0; k < K; k++) {
+          if (!allowed(k)) continue;
+          while (!free && j0 < k && t[k] - t[j0] > hi) j0++;
+          let m = Infinity, arg = -1;
+          for (let j = free ? 0 : j0; j < k && t[k] - t[j] >= (free ? 50 : lo); j++) {
+            if (dp[j] === Infinity) continue;
+            const c = dp[j] + cost(t[k] - t[j], e);
+            if (c < m) { m = c; arg = j; }
+          }
+          if (arg >= 0) { next[k] = m - L * reward[k]; back[k] = arg; }
+        }
+        dp = next; from.push(back);
+      }
+      let m = Infinity, last = -1;
+      for (let k = 0; k < K; k++) {
+        if (dp[k] === Infinity || end - t[k] < 200) continue;
+        const c = dp[k] + cost(end - t[k], exp[n - 1]);
+        if (c < m) { m = c; last = k; }
+      }
+      if (last < 0) break;
+      const idx = [last];
+      for (let a = n - 1; a >= 1; a--) idx.unshift(from[a][idx[0]]);
+      best = idx.map((k) => t[k]);
+      // Again with the pace this reciter actually has.
+      rate = (end - best[0]) / total;
+    }
+    if (!best) return this.say('تعذّر الاقتراح: راجِع علاماتك اليدوية أو علِّم يدويًا.', true);
+    this.state.starts = [0, ...best];
+    this.changed();
+    this.say('اقتراح أولي: راجِع العلامات واسحبها إن لزم.');
+  }
+  // Each verse runs from its start to the next marked start; the last verse
+  // to the end of the file. The opening (ayah 0) runs from 0 to verse 1.
+  timeline() {
+    const s = this.state.starts, n = this.count(), dur = this.state.duration || null;
+    return Array.from({ length: n + 1 }, (_, a) => {
+      const start = a === 0 ? 0 : s[a] ?? null;
+      let next = null;
+      for (let b = a + 1; b <= n; b++) if (s[b] != null) { next = s[b]; break; }
+      return { ayah: a, start, end: next ?? (a === n ? dur : null) };
+    });
+  }
+  currentAyah() {
+    const now = this.nowMs(), s = this.state.starts;
+    let cur = 0;
+    for (let a = 1; a < s.length; a++) if (s[a] != null && s[a] <= now) cur = a;
+    return cur;
+  }
+
+  /* ---- import / export ---- */
+  json() {
+    const full = this.$('full').checked, t = this.timeline();
+    const rows = t.filter((r) => r.start != null && r.end != null && !(r.ayah === 0 && r.end <= 0));
+    return JSON.stringify(rows.map((r) => full
+      ? { ayah: r.ayah, polygon: null, start_time: r.start, end_time: r.end, x: null, y: null, page: null }
+      : { ayah: r.ayah, start_time: r.start, end_time: r.end }), null, 1);
+  }
+  download() {
+    const name = `${String(this.state.surah).padStart(3, '0')}.json`;
+    const a = el('a', { href: URL.createObjectURL(new Blob([this.json()], { type: 'application/json' })), download: name });
+    a.click();
+  }
+  importText(text) {
+    try {
+      const rows = JSON.parse(text);
+      if (!Array.isArray(rows)) throw new Error('not an array');
+      const s = [0];
+      for (const r of rows) {
+        const a = +r.ayah, st = +(r.start_time ?? r.start);
+        if (a >= 1 && a <= this.count() && isFinite(st)) { while (s.length <= a) s.push(null); s[a] = Math.round(st); }
+      }
+      this.state.starts = s; this.changed(); this.say(`استُورد ${s.filter((v, i) => i && v != null).length} آية.`);
+    } catch (err) { this.say('ملف غير صالح: ' + err.message, true); }
+  }
+  async fetchTiming() {
+    const m = this.moshaf();
+    const read = m && this.timedReads?.get(this.norm(m.server));
+    if (!read) return this.say('لا يوجد توقيت منشور لهذه التلاوة في mp3quran.', true);
+    try {
+      const rows = await fetch(`${API}/ayat_timing?surah=${this.state.surah}&read=${read}`).then((r) => r.json());
+      if (!rows.length) return this.say('لا يوجد توقيت لهذه السورة.', true);
+      this.importText(JSON.stringify(rows));
+    } catch (err) { this.say('تعذّر الجلب: ' + err.message, true); }
+  }
+
+  /* ---- view ---- */
+  say(text, err) { const s = this.$('status'); s.textContent = text; s.classList.toggle('err', !!err); }
+  tick() {
+    const cur = this.currentAyah();
+    this.$('clock').textContent = `${fmt(this.nowMs())} / ${fmt(this.state.duration)}`;
+    this.wave.update({ now: this.nowMs(), current: cur });
+    if (cur !== this.lastCur) { this.lastCur = cur; this.refresh(); }
+  }
+  refresh() {
+    const t = this.timeline(), cur = this.currentAyah(), n = this.count();
+    const done = t.filter((r) => r.ayah > 0 && r.start != null).length;
+    this.$('progress').textContent = `مُعلَّم ${done} من ${n}`;
+    this.$('play').textContent = this.audio.paused ? '▶ تشغيل' : '❚❚ إيقاف';
+    const next = this.nextUnmarked();
+    this.$('mark').textContent = next ? `علِّم بداية الآية ${next}` : 'اكتمل التعليم ✓';
+    this.$('mark').disabled = !this.state.duration || !next;
+    const texts = this.state.texts;
+    const shown = cur === 0 ? (next === 1 ? 'الافتتاح (الاستعاذة والبسملة)' : '—')
+      : texts && this.state.counting === 'hafs' ? `${texts[cur - 1] ?? ''} ﴿${cur}﴾` : `الآية ${cur}`;
+    this.$('verseNow').textContent = shown;
+    this.table.render({ count: n, timeline: t, current: cur });
+    this.wave.update({ starts: this.state.starts, now: this.nowMs(), current: cur });
+    if (document.activeElement !== this.$('json')) this.$('json').value = this.json();
+    this.$('clock').textContent = `${fmt(this.nowMs())} / ${fmt(this.state.duration)}`;
+  }
+  key(e) {
+    if (e.target.closest?.('input, textarea, select')) return;
+    if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); this.mark(); }
+    else if (e.code === 'KeyP') this.toggle();
+    else if (e.code === 'KeyZ') this.undo();
+    // The waveform runs left to right in time, so the arrows do too.
+    else if (e.code === 'ArrowLeft') this.seek(this.nowMs() - 5000);
+    else if (e.code === 'ArrowRight') this.seek(this.nowMs() + 5000);
+  }
+}
+customElements.define('ayah-timer', AyahTimer);
+</script>
+</body>
+</html>
