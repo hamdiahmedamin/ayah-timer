@@ -493,6 +493,9 @@ class AyahTimer extends HTMLElement {
       const timed = this.timedReads.has(this.norm(m.server));
       return el('option', { value: i }, `${m.name}${timed ? ' · له توقيت' : ''}`);
     }));
+    // Hafs first when the reciter has it: it is what most timings are for.
+    const hafs = r.moshaf.findIndex((m) => m.name.includes('حفص'));
+    this.$('moshaf').value = hafs >= 0 ? hafs : 0;
     this.pickedMoshaf();
   }
   moshaf() {
