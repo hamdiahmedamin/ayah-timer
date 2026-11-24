@@ -192,6 +192,37 @@ button.hero-mark kbd {
   flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--line);
 }
 .dock-tools, .dock-tuning { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.ai-bar {
+  background: var(--panel-2); border: 1px solid var(--accent); border-radius: 12px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.ai-bar[hidden] { display: none; }
+.ai-bar.err { border-color: var(--danger); background: var(--danger-bg); }
+.ai-bar.done { border-color: #16a34a; }
+.ai-bar-top {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600;
+}
+.ai-bar-top #aiPct { font-variant-numeric: tabular-nums; color: var(--accent); }
+.ai-bar.err .ai-bar-top #aiPct { color: var(--danger); }
+.ai-track {
+  height: 7px; border-radius: 999px; background: var(--bg);
+  border: 1px solid var(--line); overflow: hidden;
+}
+.ai-fill {
+  height: 100%; width: 0%; background: var(--accent); border-radius: 999px;
+  transition: width 180ms ease;
+}
+.ai-bar.done .ai-fill { background: #16a34a; }
+.ai-fill.indet {
+  width: 35% !important;
+  animation: ai-slide 1.1s ease-in-out infinite;
+}
+@keyframes ai-slide {
+  0% { transform: translateX(180%); }
+  50% { transform: translateX(-20%); }
+  100% { transform: translateX(-180%); }
+}
 
 /* Status, Keys, Hints, I/O */
 .hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
@@ -1225,6 +1256,10 @@ class AyahTimer extends HTMLElement {
                   <label class="check"><input type="checkbox" id="snap" checked> التصاق بأقرب سكتة</label>
                 </div>
               </div>
+              <div class="ai-bar" id="aiBar" hidden aria-live="polite">
+                <div class="ai-bar-top"><span id="aiText"></span><span id="aiPct" dir="ltr"></span></div>
+                <div class="ai-track"><div class="ai-fill" id="aiFill"></div></div>
+              </div>
             </div>
             <div class="keys">
               <span><kbd>Space</kbd> علِّم التالية</span>
@@ -1354,6 +1389,7 @@ class AyahTimer extends HTMLElement {
   clearAudio() {
     this.loadSeq++;
     this.cancelAi();
+    const bar = this.$('aiBar'); if (bar) bar.hidden = true;
     this.stopAt = null;
     this.audio.pause();
     if (this.audioBlobUrl) { URL.revokeObjectURL(this.audioBlobUrl); this.audioBlobUrl = null; }
@@ -1952,6 +1988,7 @@ class AyahTimer extends HTMLElement {
       s.onload = () => {
         window.ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
         window.ort.env.wasm.numThreads = 1;
+        window.ort.env.wasm.proxy = true;
         resolve();
       };
       s.onerror = () => { this._ortPromise = null; reject(new Error('تعذّر تحميل مكتبة ONNX')); };
@@ -1976,7 +2013,7 @@ class AyahTimer extends HTMLElement {
     }
     return { q: out, frames: keep, V };
   }
-  alignCtc(em, nFrames, V, ayahTokens, blankId, beam = 2500) {
+  async alignCtc(em, nFrames, V, ayahTokens, blankId, beam = 2500, signal = null) {
     const states = [-1, blankId], firstState = [];
     for (const toks of ayahTokens) {
       if (!toks.length) { firstState.push(states.length - 1); continue; }
@@ -2000,6 +2037,12 @@ class AyahTimer extends HTMLElement {
       dp[0] = 0; dp[1] = 0; if (S > 2) dp[2] = 0;
       let lo = 0, hi = W;
       for (let t = 0; t < nFrames; t++) {
+        if (t > 0 && t % 1500 === 0) {
+          if (signal?.aborted) throw new Error('aborted');
+          const pct = 95 + Math.min(4, Math.floor((t * 4) / nFrames));
+          this.setAiProgress('🤖 جارٍ مطابقة الآيات مع الصوت…', pct);
+          await this.paintYield();
+        }
         const eBase = t * V;
         let minQ = 255;
         for (let v = 0; v < V; v++) if (em[eBase + v] < minQ) minQ = em[eBase + v];
@@ -2043,6 +2086,25 @@ class AyahTimer extends HTMLElement {
     }
     return null;
   }
+  paintYield() {
+    return new Promise((r) => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(r, 0));
+      else setTimeout(r, 0);
+    });
+  }
+  setAiProgress(text, pct = null, state = 'active') {
+    const bar = this.$('aiBar'), txt = this.$('aiText'), pEl = this.$('aiPct'), fill = this.$('aiFill');
+    if (bar && txt && pEl && fill) {
+      bar.hidden = false;
+      bar.classList.toggle('err', state === 'err');
+      bar.classList.toggle('done', state === 'done');
+      txt.textContent = text;
+      pEl.textContent = pct != null ? `${pct}%` : '…';
+      fill.classList.toggle('indet', pct == null && state === 'active');
+      if (pct != null) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    }
+    this.say(text, state === 'err');
+  }
   async fetchCached(url, label, signal) {
     let cache = null;
     try { cache = await caches.open('ayah-timer-ai-v1'); } catch {}
@@ -2059,15 +2121,21 @@ class AyahTimer extends HTMLElement {
     const total = +(res.headers.get('content-length') || 0);
     const reader = res.body.getReader();
     const parts = [];
-    let got = 0;
+    let got = 0, lastUi = 0;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       parts.push(value);
       got += value.byteLength;
-      if (total > 0) {
-        const pct = Math.min(100, Math.round((got * 100) / total));
-        this.say(`جارٍ تنزيل ${label}… ${(got / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB (${pct}%)`);
+      const now = Date.now();
+      if (now - lastUi > 150) {
+        lastUi = now;
+        if (total > 0) {
+          const pct = Math.min(100, Math.round((got * 100) / total));
+          this.setAiProgress(`جارٍ تنزيل ${label}… ${(got / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`, pct);
+        } else {
+          this.setAiProgress(`جارٍ تنزيل ${label}… ${(got / 1048576).toFixed(1)} MB`, null);
+        }
       }
     }
     const blob = new Blob(parts, { type: res.headers.get('content-type') || 'application/octet-stream' });
@@ -2077,7 +2145,8 @@ class AyahTimer extends HTMLElement {
   }
   async ensureAiModel(signal) {
     if (this.aiVocab && this.aiSess) return;
-    this.say('جارٍ تحميل محرّك الذكاء الاصطناعي…');
+    this.setAiProgress('جارٍ تحميل محرّك الذكاء الاصطناعي…', null);
+    await this.paintYield();
     await this.loadOrt();
     const base = 'https://huggingface.co/onnx-community/wav2vec2-base-arabic-without-reused-en-token-ids-v1-ONNX/resolve/main';
     const vRes = await this.fetchCached(`${base}/vocab.json`, 'قاموس الأحرف', signal);
@@ -2085,8 +2154,8 @@ class AyahTimer extends HTMLElement {
     const mRes = await this.fetchCached(`${base}/onnx/model_q4.onnx`, 'نموذج الذكاء الاصطناعي (86 MB)', signal);
     const modelBuf = await mRes.arrayBuffer();
     if (signal?.aborted) throw new Error('aborted');
-    this.say('جارٍ تهيئة النموذج…');
-    await new Promise((r) => setTimeout(r, 20));
+    this.setAiProgress('جارٍ تهيئة نموذج الذكاء الاصطناعي…', null);
+    await this.paintYield();
     this.aiSess = await window.ort.InferenceSession.create(new Uint8Array(modelBuf), { executionProviders: ['wasm'] });
   }
   normalizeForVocab(text, vocab) {
@@ -2154,12 +2223,14 @@ class AyahTimer extends HTMLElement {
     this.aiAbort = new AbortController();
     const signal = this.aiAbort.signal;
     this.$('aiAuto').textContent = '⏹ إيقاف AI';
+    this.setAiProgress('جارٍ تحضير الصوت للذكاء الاصطناعي…', 0);
+    await this.paintYield();
 
     try {
       await this.ensureAiModel(signal);
 
-      const CHUNK_SAMPLES = 30 * 16000;
-      const OV_SAMPLES = 2 * 16000;
+      const CHUNK_SAMPLES = 10 * 16000;
+      const OV_SAMPLES = 1.5 * 16000;
       const OV_FRAMES = OV_SAMPLES / 320;
       let tail = new Float32Array(0);
       let bufParts = [], bufLen = 0, processedSamples = 0;
@@ -2167,6 +2238,13 @@ class AyahTimer extends HTMLElement {
 
       const flushChunk = async (pcmCore) => {
         if (signal.aborted) throw new Error('aborted');
+        const dur = this.state.duration || Math.round(((processedSamples + pcmCore.length) * 1000) / 16000);
+        const startMs = Math.round((processedSamples * 1000) / 16000);
+        const endMs = Math.min(dur, Math.round(((processedSamples + pcmCore.length) * 1000) / 16000));
+        const startPct = dur ? Math.min(95, Math.round((startMs * 95) / dur)) : 0;
+        this.setAiProgress(`🤖 تحليل الصوت: ${fmt(startMs)} ← ${fmt(endMs)} / ${fmt(dur)}`, startPct);
+        await this.paintYield();
+
         const wav = new Float32Array(tail.length + pcmCore.length);
         wav.set(tail, 0);
         wav.set(pcmCore, tail.length);
@@ -2190,10 +2268,9 @@ class AyahTimer extends HTMLElement {
           : new Float32Array(0);
         processedSamples += pcmCore.length;
         const doneMs = Math.round((processedSamples * 1000) / 16000);
-        const dur = this.state.duration || doneMs;
-        const pct = dur ? Math.min(100, Math.round((doneMs * 100) / dur)) : 0;
-        this.say(`🤖 ذكاء اصطناعي: ${fmt(doneMs)} / ${fmt(dur)} (${pct}%)`);
-        await new Promise((r) => setTimeout(r, 0));
+        const pct = dur ? Math.min(95, Math.round((doneMs * 95) / dur)) : 0;
+        this.setAiProgress(`🤖 تحليل الصوت: ${fmt(doneMs)} / ${fmt(dur)}`, pct);
+        await this.paintYield();
       };
 
       const feedPcm = async (pcm) => {
@@ -2231,8 +2308,8 @@ class AyahTimer extends HTMLElement {
       }
       if (signal.aborted) throw new Error('aborted');
 
-      this.say('🤖 جارٍ مطابقة الآيات مع الصوت…');
-      await new Promise((r) => setTimeout(r, 10));
+      this.setAiProgress('🤖 جارٍ مطابقة الآيات مع الصوت…', 96);
+      await this.paintYield();
       const V = emChunks[0]?.V || (Math.max(...Object.values(this.aiVocab)) + 3);
       const totalFrames = emChunks.reduce((a, c) => a + c.frames, 0);
       const em = new Uint8Array(totalFrames * V);
@@ -2246,17 +2323,21 @@ class AyahTimer extends HTMLElement {
         return this.normalizeForVocab(txt, this.aiVocab);
       });
       const blankId = this.aiVocab['<pad>'] ?? 33;
-      const rawStarts = this.alignCtc(em, totalFrames, V, ayahTokens, blankId, 2500);
+      const rawStarts = await this.alignCtc(em, totalFrames, V, ayahTokens, blankId, 2500, signal);
       if (!rawStarts) throw new Error('تعذّرت المحاذاة');
 
       const totalMs = this.state.duration || Math.round((processedSamples * 1000) / 16000);
       const refined = this.refineOnset(rawStarts, totalMs);
       this.state.starts = [0, ...refined];
       this.changed();
-      this.say('تم التوقيت بالذكاء الاصطناعي · راجِع العلامات إن لزم.');
+      this.setAiProgress('تم التوقيت بالذكاء الاصطناعي ✓ راجِع العلامات إن لزم.', 100, 'done');
     } catch (err) {
-      if (err.message === 'aborted') this.say('أُوقف التوقيت بالذكاء الاصطناعي.');
-      else this.say('تعذّر التوقيت بالذكاء الاصطناعي: ' + err.message, true);
+      if (err.message === 'aborted') {
+        const bar = this.$('aiBar'); if (bar) bar.hidden = true;
+        this.say('أُوقف التوقيت بالذكاء الاصطناعي.');
+      } else {
+        this.setAiProgress('تعذّر التوقيت بالذكاء الاصطناعي: ' + err.message, 0, 'err');
+      }
     } finally {
       this.cancelAi();
     }
