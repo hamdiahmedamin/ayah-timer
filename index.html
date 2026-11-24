@@ -9,77 +9,215 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=Amiri+Quran&display=swap" rel="stylesheet">
 <style>
+@font-face {
+  font-family: "KFGQPC Warsh";
+  src: url("https://cdn.jsdelivr.net/gh/thetruetruth/quran-data-kfgqpc@main/warsh/font/warsh.10.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "KFGQPC Qaloon";
+  src: url("https://cdn.jsdelivr.net/gh/thetruetruth/quran-data-kfgqpc@main/qaloon/font/qaloon.10.woff2") format("woff2");
+  font-display: swap;
+}
 :root {
-  --bg: #f6f3ea; --panel: #fffdf7; --ink: #1d2422; --muted: #5d6b67;
-  --line: #e1dccd; --accent: #286656; --accent-ink: #fff; --soft: #e3efe9;
-  --wave: #9bb8ae; --wave-played: #286656; --mark: #c2410c; --now: #d4a017;
-  --verse: rgba(40,102,86,.10); --danger: #b42318;
+  --bg: #f4f1e8; --panel: #fffdf8; --panel-2: #f8f5ec; --ink: #1a2220; --muted: #5d6b67;
+  --line: #e2dccb; --accent: #1f6454; --accent-ink: #fff; --soft: #e2efe9;
+  --wave: #9cb9af; --wave-played: #1f6454; --mark: #c84b14; --now: #c9920e;
+  --verse: rgba(31,100,84,.10); --danger: #b42318; --danger-bg: rgba(180,35,24,.09);
+  --shadow: 0 1px 2px rgba(20,30,26,.04), 0 8px 24px rgba(20,30,26,.04);
+  --quran-font: "Amiri Quran", "IBM Plex Sans Arabic", serif;
   color-scheme: light;
 }
+ayah-timer[data-riwayah="warsh"] { --quran-font: "KFGQPC Warsh", "Amiri Quran", serif; }
+ayah-timer[data-riwayah="qalun"] { --quran-font: "KFGQPC Qaloon", "Amiri Quran", serif; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #111615; --panel: #182020; --ink: #e7ece9; --muted: #9aa9a4;
-    --line: #2a3533; --accent: #7fd1b9; --accent-ink: #0d1514; --soft: #1f2c29;
-    --wave: #3f5853; --wave-played: #7fd1b9; --mark: #f08a5d; --now: #e8c25a;
-    --verse: rgba(127,209,185,.10); --danger: #f97066;
+    --bg: #0f1413; --panel: #161e1d; --panel-2: #1c2624; --ink: #e7ece9; --muted: #93a39e;
+    --line: #273331; --accent: #6fd1b6; --accent-ink: #0b1412; --soft: #1b2c28;
+    --wave: #38524d; --wave-played: #6fd1b6; --mark: #f08a5d; --now: #ecc45a;
+    --verse: rgba(111,209,182,.11); --danger: #f97066; --danger-bg: rgba(249,112,102,.12);
+    --shadow: 0 1px 2px rgba(0,0,0,.25), 0 10px 28px rgba(0,0,0,.22);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #111615; --panel: #182020; --ink: #e7ece9; --muted: #9aa9a4;
-  --line: #2a3533; --accent: #7fd1b9; --accent-ink: #0d1514; --soft: #1f2c29;
-  --wave: #3f5853; --wave-played: #7fd1b9; --mark: #f08a5d; --now: #e8c25a;
-  --verse: rgba(127,209,185,.10); --danger: #f97066;
+  --bg: #0f1413; --panel: #161e1d; --panel-2: #1c2624; --ink: #e7ece9; --muted: #93a39e;
+  --line: #273331; --accent: #6fd1b6; --accent-ink: #0b1412; --soft: #1b2c28;
+  --wave: #38524d; --wave-played: #6fd1b6; --mark: #f08a5d; --now: #ecc45a;
+  --verse: rgba(111,209,182,.11); --danger: #f97066; --danger-bg: rgba(249,112,102,.12);
+  --shadow: 0 1px 2px rgba(0,0,0,.25), 0 10px 28px rgba(0,0,0,.22);
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
-  background: var(--bg); color: var(--ink);
-  font: 15px/1.6 "IBM Plex Sans Arabic", system-ui, sans-serif;
+  background: radial-gradient(1100px 420px at 85% -6%, var(--soft), transparent 65%), var(--bg);
+  color: var(--ink);
+  font: 14.5px/1.6 "IBM Plex Sans Arabic", system-ui, sans-serif;
 }
-main { max-width: 1100px; margin: 0 auto; padding: 18px 16px 60px; }
-header.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-header.top h1 { font-size: 22px; margin: 0; }
-header.top p { margin: 0; color: var(--muted); font-size: 13px; flex: 1 1 260px; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
-.panel h2 { font-size: 15px; margin: 0 0 10px; }
+main { max-width: 1360px; margin: 0 auto; padding: 16px 20px 44px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Header */
+header.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand svg { flex: none; width: 38px; height: 38px; border-radius: 11px; box-shadow: var(--shadow); }
+.brand h1 { font-size: 20px; line-height: 1.2; margin: 0; letter-spacing: -.01em; }
+.brand p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+.top-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Panels & Heads */
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+  padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+}
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.panel-head h2 { font-size: 14.5px; margin: 0; display: flex; align-items: center; gap: 8px; }
+.panel-head-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Controls */
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .grow { flex: 1 1 200px; min-width: 0; }
-label.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+label.check {
+  display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink);
+  cursor: pointer; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--panel-2); min-height: 38px; user-select: none;
+}
+label.check input { min-height: auto; margin: 0; accent-color: var(--accent); }
 input, select, textarea, button {
   font: inherit; color: inherit; border-radius: 10px; border: 1px solid var(--line);
-  background: var(--bg); padding: 8px 10px; min-height: 40px;
+  background: var(--bg); padding: 7px 11px; min-height: 38px;
+  transition: background-color 150ms ease, border-color 150ms ease, transform 80ms ease, opacity 150ms ease;
 }
-input[type="number"] { width: 90px; }
-input[type="file"] { padding: 6px; }
-button { cursor: pointer; background: var(--soft); border-color: transparent; font-weight: 600; }
+input:hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) { border-color: var(--muted); }
+input[type="number"] { width: 88px; direction: ltr; font-variant-numeric: tabular-nums; }
+input[type="file"] { padding: 5px 8px; font-size: 13px; }
+button {
+  cursor: pointer; background: var(--soft); border-color: transparent; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+}
+button:hover:not(:disabled) { filter: brightness(.97); }
+button:active:not(:disabled) { transform: translateY(1px); }
 button.primary { background: var(--accent); color: var(--accent-ink); }
 button.ghost { background: transparent; border-color: var(--line); }
+button.ghost:hover:not(:disabled) { background: var(--panel-2); }
+button.danger-ghost { background: transparent; border-color: var(--line); color: var(--muted); }
+button.danger-ghost:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+button.sm { min-height: 32px; padding: 4px 10px; font-size: 12.5px; border-radius: 8px; }
 button:disabled { opacity: .45; cursor: default; }
-button.big { min-height: 52px; padding: 0 22px; font-size: 17px; }
-.tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
-.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
-.hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
-.status { font-size: 13px; color: var(--muted); }
-.status.err { color: var(--danger); }
-.verse-now {
-  font-family: "Amiri Quran", "IBM Plex Sans Arabic", serif; font-size: 24px; line-height: 2.1;
-  min-height: 56px; text-align: center; padding: 6px 8px; border-radius: 10px; background: var(--soft);
+
+/* Segmented Tabs */
+.segmented {
+  display: inline-flex; gap: 3px; padding: 3px; border-radius: 11px;
+  background: var(--panel-2); border: 1px solid var(--line);
 }
-.badge { display: inline-block; background: var(--soft); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
-.transport { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.clock { font-variant-numeric: tabular-nums; direction: ltr; min-width: 130px; text-align: center; font-weight: 600; }
-kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; background: var(--bg); }
-.keys { color: var(--muted); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; }
-.split { display: grid; grid-template-columns: 1fr; gap: 12px; }
-@media (min-width: 900px) { .split { grid-template-columns: 1.15fr .85fr; } }
-textarea { width: 100%; min-height: 150px; direction: ltr; font: 12px/1.5 ui-monospace, monospace; }
+.segmented button {
+  min-height: 30px; padding: 4px 12px; font-size: 13px; border-radius: 8px;
+  background: transparent; color: var(--muted); font-weight: 600;
+}
+.segmented button[aria-selected="true"] {
+  background: var(--accent); color: var(--accent-ink);
+}
+.pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--soft); color: var(--ink); border-radius: 999px;
+  padding: 2px 9px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.segmented button[aria-selected="true"] .pill {
+  background: rgba(255,255,255,.22); color: var(--accent-ink);
+}
+
+/* Source Grid */
+.source-panel { position: relative; z-index: 20; }
+.source-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 10px; align-items: end;
+}
+.source-grid .span-2 { grid-column: span 2; }
+@media (max-width: 640px) { .source-grid .span-2 { grid-column: span 1; } }
+.dock-tuning smart-select { min-width: 84px; }
+.source-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.badge {
+  display: inline-flex; align-items: center; background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 5px 12px; font-size: 12.5px; font-weight: 600; min-height: 38px;
+}
+
+/* Studio Workspace */
+.workspace { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }
+@media (min-width: 1024px) {
+  .workspace { grid-template-columns: minmax(0, 1fr) 410px; }
+  .inspector-col { position: sticky; top: 16px; }
+}
+.studio-col, .inspector-col { min-width: 0; }
+.studio-col > *, .inspector-col > * { margin-bottom: 14px; }
+.studio-col > :last-child, .inspector-col > :last-child { margin-bottom: 0; }
+
+/* Seekbar */
+.seek { display: flex; align-items: center; gap: 10px; margin-top: 10px; direction: ltr; }
+.seek input[type="range"] {
+  flex: 1; min-height: 24px; padding: 0; border: 0; background: transparent;
+  accent-color: var(--accent); cursor: pointer;
+}
+.seek .clock { min-width: 64px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+
+/* Transport & Tool Dock */
+.dock { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.dock-main {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 10px; border-radius: 13px; background: var(--panel-2); border: 1px solid var(--line);
+}
+button.hero-mark {
+  min-height: 48px; padding: 0 20px; font-size: 15.5px; border-radius: 11px;
+  flex: 1 1 220px; justify-content: space-between;
+}
+button.hero-mark kbd {
+  background: rgba(255,255,255,.18); color: inherit; border-color: rgba(255,255,255,.35);
+  font-size: 11px; padding: 1px 6px;
+}
+.btn-group { display: inline-flex; gap: 4px; align-items: center; }
+.clock-chip {
+  font-variant-numeric: tabular-nums; direction: ltr; min-width: 128px; text-align: center;
+  font-weight: 700; font-size: 13.5px; padding: 6px 10px; border-radius: 9px;
+  background: var(--bg); border: 1px solid var(--line);
+}
+.dock-sub {
+  display: flex; gap: 10px; align-items: flex-end; justify-content: space-between;
+  flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--line);
+}
+.dock-tools, .dock-tuning { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+
+/* Status, Keys, Hints, I/O */
+.hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+.status { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.status:empty { display: none; }
+.status.err {
+  color: var(--danger); background: var(--danger-bg); border: 1px solid var(--danger);
+  padding: 3px 10px; border-radius: 999px;
+}
+kbd {
+  font: 11.5px ui-monospace, monospace; border: 1px solid var(--line);
+  border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px; background: var(--bg);
+}
+.keys {
+  color: var(--muted); font-size: 12px; display: flex; gap: 8px 14px;
+  flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line);
+}
+.keys span { display: inline-flex; align-items: center; gap: 5px; }
+textarea {
+  width: 100%; min-height: 220px; direction: ltr;
+  font: 12px/1.5 ui-monospace, monospace; resize: vertical; margin-top: 10px;
+}
 .hidden { display: none !important; }
-.seek { display: flex; align-items: center; gap: 10px; margin-top: 8px; direction: ltr; }
-.seek input { flex: 1; min-height: 28px; padding: 0; accent-color: var(--accent); }
-.seek .clock { min-width: 70px; font-size: 13px; color: var(--muted); }
-a { color: var(--accent); }
+footer.foot { margin-top: 14px; text-align: center; color: var(--muted); font-size: 12px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -124,16 +262,36 @@ class WaveView extends HTMLElement {
     this.attachShadow({ mode: 'open' }).innerHTML = `
       <style>
         :host { display: block; }
-        .wrap { position: relative; overflow-x: auto; overflow-y: hidden; border-radius: 10px;
+        .wrap { position: relative; overflow-x: auto; overflow-y: hidden; border-radius: 12px;
                 background: var(--bg); border: 1px solid var(--line); direction: ltr; }
-        .spacer { position: relative; height: 150px; }
-        canvas { position: sticky; left: 0; top: 0; display: block; height: 150px; touch-action: none; cursor: pointer; }
-        .bar { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
-        input { flex: 1; }
+        .spacer { position: relative; height: 170px; }
+        canvas { position: sticky; left: 0; top: 0; display: block; height: 170px; touch-action: none; cursor: pointer; }
+        .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px;
+               font-size: 12px; color: var(--muted); }
+        .zoom-ctl { display: flex; align-items: center; gap: 6px; flex: 1 1 200px; min-width: 0; }
+        .zoom-btn { font: inherit; font-weight: 700; border: 1px solid var(--line); background: var(--panel-2);
+                    color: var(--ink); border-radius: 7px; width: 26px; height: 26px; cursor: pointer;
+                    display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+        .zoom-btn:hover { border-color: var(--muted); }
+        input[type="range"] { flex: 1; min-width: 80px; accent-color: var(--accent); cursor: pointer; }
+        .z { font-variant-numeric: tabular-nums; direction: ltr; font-weight: 600; min-width: 34px;
+             text-align: center; padding: 2px 7px; border-radius: 999px; background: var(--panel-2);
+             border: 1px solid var(--line); color: var(--ink); }
+        .follow-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+                       background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); cursor: pointer; }
+        .follow-pill input { accent-color: var(--accent); margin: 0; }
       </style>
       <div class="wrap"><div class="spacer"><canvas></canvas></div></div>
-      <div class="bar">تكبير <input type="range" min="1" max="60" value="1" step="1"> <span class="z">×1</span>
-        <label><input type="checkbox" checked class="follow" style="flex:none"> متابعة رأس التشغيل</label></div>`;
+      <div class="bar">
+        <div class="zoom-ctl">
+          <span>تكبير</span>
+          <button type="button" class="zoom-btn" data-z="-1" aria-label="تصغير">−</button>
+          <input type="range" min="1" max="60" value="1" step="1" aria-label="مستوى التكبير">
+          <button type="button" class="zoom-btn" data-z="1" aria-label="تكبير">+</button>
+          <span class="z">×1</span>
+        </div>
+        <label class="follow-pill"><input type="checkbox" checked class="follow"> متابعة رأس التشغيل</label>
+      </div>`;
     this.canvas = this.shadowRoot.querySelector('canvas');
     this.wrap = this.shadowRoot.querySelector('.wrap');
     this.spacer = this.shadowRoot.querySelector('.spacer');
@@ -141,14 +299,19 @@ class WaveView extends HTMLElement {
     this.followBox = this.shadowRoot.querySelector('.follow');
     this.peaks = null; this.duration = 0; this.starts = []; this.now = 0; this.current = -1;
     this.zoom = 1; this.drag = null;
-    this.zoomInput.addEventListener('input', () => {
+    const setZoom = (val) => {
       const keep = this.now;
-      this.zoom = +this.zoomInput.value;
+      this.zoom = Math.max(1, Math.min(60, val));
+      this.zoomInput.value = this.zoom;
       this.shadowRoot.querySelector('.z').textContent = '×' + this.zoom;
       this.spacer.style.width = this.width() + 'px';
       this.reveal(keep, true);
       this.draw();
-    });
+    };
+    this.zoomInput.addEventListener('input', () => setZoom(+this.zoomInput.value));
+    this.shadowRoot.querySelectorAll('.zoom-btn').forEach((b) =>
+      b.addEventListener('click', () => setZoom(this.zoom + (+b.dataset.z * Math.max(1, Math.round(this.zoom / 6)))))
+    );
     this.wrap.addEventListener('scroll', () => this.draw(), { passive: true });
     new ResizeObserver(() => this.draw()).observe(this.wrap);
     this.canvas.addEventListener('pointerdown', (e) => this.down(e));
@@ -211,7 +374,7 @@ class WaveView extends HTMLElement {
   up() { this.drag = null; }
   draw() {
     const c = this.canvas, viewW = Math.max(this.wrap.clientWidth, 10);
-    const totalW = this.peaks ? this.width() : viewW, h = 150, dpr = devicePixelRatio || 1;
+    const totalW = this.peaks ? this.width() : viewW, h = 170, rulerH = 18, waveH = h - rulerH, dpr = devicePixelRatio || 1;
     this.spacer.style.width = totalW + 'px';
     const needW = Math.round(viewW * dpr), needH = Math.round(h * dpr);
     if (c.width !== needW || c.height !== needH) {
@@ -220,8 +383,8 @@ class WaveView extends HTMLElement {
     const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, viewW, h);
     const css = getComputedStyle(this);
     const color = (v) => css.getPropertyValue(v).trim();
-    const cMuted = color('--muted'), cVerse = color('--verse'), cPlayed = color('--wave-played'),
-      cWave = color('--wave'), cMark = color('--mark'), cNow = color('--now');
+    const cMuted = color('--muted'), cLine = color('--line'), cVerse = color('--verse'),
+      cPlayed = color('--wave-played'), cWave = color('--wave'), cMark = color('--mark'), cNow = color('--now');
     if (!this.peaks) {
       g.fillStyle = cMuted; g.font = '13px sans-serif'; g.textAlign = 'center';
       g.fillText('حمّل تلاوة لرسم موجتها', viewW / 2, h / 2); return;
@@ -234,31 +397,56 @@ class WaveView extends HTMLElement {
       if (a != null) {
         const b = s.slice(cur + 1).find((v) => v != null) ?? this.duration;
         const x0 = Math.max(0, this.xOf(a) - off), x1 = Math.min(viewW, this.xOf(b) - off);
-        if (x1 > x0) { g.fillStyle = cVerse; g.fillRect(x0, 0, x1 - x0, h); }
+        if (x1 > x0) { g.fillStyle = cVerse; g.fillRect(x0, 0, x1 - x0, waveH); }
       }
     }
-    const n = this.peaks.length, played = this.xOf(this.now), mid = h / 2;
+    const n = this.peaks.length, played = this.xOf(this.now), mid = waveH / 2;
     for (let sx = 0; sx < viewW; sx++) {
       const wx = sx + off;
       if (wx >= totalW) break;
       const i = Math.min(n - 1, Math.floor((wx / totalW) * n));
-      const v = this.peaks[i] * (h * .46);
+      const v = this.peaks[i] * ((waveH - 12) * .45);
       g.fillStyle = wx < played ? cPlayed : cWave;
       g.fillRect(sx, mid - v, 1, Math.max(1, v * 2));
     }
+    // Time ruler
+    g.fillStyle = cLine; g.fillRect(0, waveH, viewW, 1);
+    const pps = totalW / Math.max(1, this.duration / 1000);
+    const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    const step = steps.find((st) => st * pps >= 70) || 600;
+    const t0 = Math.floor(this.msOf(off) / 1000 / step) * step;
+    const t1 = Math.ceil(this.msOf(off + viewW) / 1000);
+    g.font = '10px ui-monospace, monospace'; g.textAlign = 'left';
+    for (let sec = t0; sec <= t1; sec += step) {
+      const sx = this.xOf(sec * 1000) - off;
+      if (sx < -20 || sx > viewW) continue;
+      g.fillStyle = cLine; g.fillRect(sx, waveH, 1, 5);
+      const m = Math.floor(sec / 60), r = sec % 60;
+      g.fillStyle = cMuted; g.fillText(`${m}:${String(r).padStart(2, '0')}`, sx + 3, h - 4);
+    }
+    // Verse marks
     g.font = '600 11px sans-serif'; g.textAlign = 'left';
     s.forEach((ms, a) => {
       if (a < 1 || ms == null) return;
       const sx = this.xOf(ms) - off;
       if (sx < -40 || sx > viewW + 2) return;
-      const label = String(a), bw = Math.max(22, Math.ceil(g.measureText(label).width) + 8);
-      g.fillStyle = cMark; g.fillRect(sx - 1, 0, 2, h);
-      g.fillRect(sx - 1, 0, bw, 15);
-      g.fillStyle = '#fff'; g.fillText(label, sx + 2, 11);
+      const label = String(a), bw = Math.max(22, Math.ceil(g.measureText(label).width) + 9);
+      g.fillStyle = cMark; g.fillRect(sx - 1, 0, 2, waveH);
+      if (g.roundRect) {
+        g.beginPath(); g.roundRect(sx - 1, 2, bw, 15, 4); g.fill();
+      } else {
+        g.fillRect(sx - 1, 2, bw, 15);
+      }
+      g.fillStyle = '#fff'; g.fillText(label, sx + 3, 13);
     });
+    // Playhead
     const px = played - off;
-    if (px >= -2 && px <= viewW + 2) {
-      g.fillStyle = cNow; g.fillRect(px - 1, 0, 2, h);
+    if (px >= -5 && px <= viewW + 5) {
+      g.fillStyle = cNow;
+      g.fillRect(px - 1, 0, 2, waveH);
+      if (g.beginPath) {
+        g.beginPath(); g.moveTo(px - 5, 0); g.lineTo(px + 5, 0); g.lineTo(px, 6); g.closePath(); g.fill();
+      }
     }
   }
 }
@@ -276,21 +464,27 @@ class AyahTable extends HTMLElement {
     this.attachShadow({ mode: 'open' }).innerHTML = `
       <style>
         :host { display: block; }
-        .scroll { max-height: 520px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th, td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
-        th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; z-index: 1; }
+        .scroll { max-height: 580px; overflow: auto; border: 1px solid var(--line); border-radius: 12px;
+                  background: var(--bg); scrollbar-width: thin; }
+        table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+        th, td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: center; white-space: nowrap; }
+        th { position: sticky; top: 0; background: var(--panel-2); color: var(--muted); font-weight: 700; z-index: 1; }
+        tbody tr:hover td { background: var(--panel-2); }
         tr.now td { background: var(--verse); }
-        tr.missing td.t { color: var(--danger); }
+        tr.now td:first-child { box-shadow: inset -3px 0 0 var(--accent); font-weight: 700; color: var(--accent); }
+        tr.missing td.t { color: var(--danger); opacity: .8; }
         td.t { direction: ltr; font-variant-numeric: tabular-nums; }
-        input { width: 86px; direction: ltr; font: inherit; padding: 3px 5px; border-radius: 7px;
-                border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+        input { width: 82px; direction: ltr; font: inherit; font-variant-numeric: tabular-nums; padding: 4px 6px;
+                border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); text-align: center; }
+        input:focus { outline: none; border-color: var(--accent); }
         button { font: inherit; font-size: 12px; border: 0; border-radius: 7px; padding: 4px 7px; margin: 0 1px;
-                 background: var(--soft); color: var(--ink); cursor: pointer; }
+                 background: var(--soft); color: var(--ink); cursor: pointer; transition: filter 120ms ease; }
+        button:hover:not(:disabled) { filter: brightness(.95); }
+        button[data-act="clear"]:hover:not(:disabled) { color: var(--danger); background: var(--danger-bg); }
         button:disabled { opacity: .35; cursor: default; }
       </style>
       <div class="scroll"><table><thead><tr>
-        <th>الآية</th><th>البداية (ms)</th><th>النهاية</th><th>المدة</th><th></th>
+        <th>الآية</th><th>البداية (ms)</th><th>النهاية</th><th>المدة</th><th>أدوات</th>
       </tr></thead><tbody></tbody></table></div>`;
     this.body = this.shadowRoot.querySelector('tbody');
     this.rows = [];
@@ -341,17 +535,587 @@ class AyahTable extends HTMLElement {
 customElements.define('ayah-table', AyahTable);
 
 /* ------------------------------------------------------------------ */
+/* <progress-meter>: compact surah completion pill + bar.             */
+/* ------------------------------------------------------------------ */
+class ProgressMeter extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).innerHTML = `
+      <style>
+        :host { display: inline-block; }
+        .wrap { display: flex; flex-direction: column; gap: 5px; min-width: 155px;
+                padding: 7px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); }
+        .top { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+               font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+        .pct { color: var(--accent); direction: ltr; }
+        .track { height: 5px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+        .fill { height: 100%; width: 0%; background: var(--accent); border-radius: 999px;
+                transition: width 200ms ease; }
+        .wrap.done .fill { background: #16a34a; }
+      </style>
+      <div class="wrap">
+        <div class="top"><span class="txt">مُعلَّم 0 من 0</span><span class="pct">0%</span></div>
+        <div class="track"><div class="fill"></div></div>
+      </div>`;
+    this.wrap = this.shadowRoot.querySelector('.wrap');
+    this.txt = this.shadowRoot.querySelector('.txt');
+    this.pct = this.shadowRoot.querySelector('.pct');
+    this.fill = this.shadowRoot.querySelector('.fill');
+  }
+  update({ done = 0, total = 0 }) {
+    const p = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    this.txt.textContent = `مُعلَّم ${done} من ${total}`;
+    this.pct.textContent = `${p}%`;
+    this.fill.style.width = `${p}%`;
+    this.wrap.classList.toggle('done', total > 0 && done >= total);
+  }
+}
+customElements.define('progress-meter', ProgressMeter);
+
+/* ------------------------------------------------------------------ */
+/* <verse-stage>: calligraphic stage for current + upcoming verse.    */
+/* ------------------------------------------------------------------ */
+class VerseStage extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).innerHTML = `
+      <style>
+        :host { display: block; }
+        .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+                padding: 14px 16px; box-shadow: var(--shadow); }
+        .meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .badge { background: var(--soft); color: var(--accent); font-size: 12px; font-weight: 700;
+                 padding: 2px 10px; border-radius: 999px; }
+        .hint { font-size: 12px; color: var(--muted); }
+        .ayah { font-family: var(--quran-font);
+                font-size: clamp(28px, 3vw, 38px); line-height: 2.15; text-align: center;
+                padding: 12px 16px; border-radius: 12px; background: var(--panel-2); min-height: 72px;
+                white-space: normal; overflow-wrap: anywhere; }
+        .next { margin-top: 10px; padding: 10px 14px; border-radius: 10px; background: var(--soft);
+                font-size: 13px; display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+        .next-lbl { font-weight: 700; color: var(--accent); white-space: nowrap; font-size: 13px; padding-top: 8px; }
+        .next-txt { color: var(--ink); line-height: 2.0; white-space: normal; overflow-wrap: anywhere;
+                    font-family: var(--quran-font); font-size: clamp(22px, 2.2vw, 28px); }
+        .next.done { justify-content: center; align-items: center; font-weight: 700; color: var(--accent); }
+      </style>
+      <div class="card">
+        <div class="meta"><span class="badge">الافتتاح</span><span class="hint">قيد التلاوة</span></div>
+        <div class="ayah">—</div>
+        <div class="next" hidden><span class="next-lbl"></span><span class="next-txt"></span></div>
+      </div>`;
+    this.badge = this.shadowRoot.querySelector('.badge');
+    this.hintEl = this.shadowRoot.querySelector('.hint');
+    this.ayahEl = this.shadowRoot.querySelector('.ayah');
+    this.nextBox = this.shadowRoot.querySelector('.next');
+    this.nextLbl = this.shadowRoot.querySelector('.next-lbl');
+    this.nextTxt = this.shadowRoot.querySelector('.next-txt');
+  }
+  update({ cur, next, texts, riwayah, page }) {
+    const arD = (n) => String(n).replace(/\d/g, (d) => '٠١٢٣٤٥٦٧٨٩'[d]);
+    const riwName = riwayah === 'warsh' ? 'مصحف ورش' : riwayah === 'qalun' ? 'مصحف قالون' : 'مصحف حفص';
+    this.badge.textContent = cur === 0 ? 'الافتتاح' : `الآية ${cur}`;
+    this.hintEl.textContent = page ? `${riwName} · ص ${arD(page)}` : riwName;
+    const numMark = (riwayah === 'warsh' || riwayah === 'qalun') ? `\u00A0${arD(cur)}` : ` ﴿${cur}﴾`;
+    this.ayahEl.textContent = cur === 0
+      ? (next === 1 ? 'الاستعاذة والبسملة' : '—')
+      : texts && texts[cur - 1]
+        ? `${texts[cur - 1]}${numMark}`
+        : `الآية ${cur}`;
+    if (next == null) {
+      this.nextBox.hidden = false;
+      this.nextBox.classList.add('done');
+      this.nextLbl.textContent = 'اكتمل تعليم جميع الآيات ✓';
+      this.nextTxt.textContent = '';
+    } else if (texts && texts[next - 1]) {
+      this.nextBox.hidden = false;
+      this.nextBox.classList.remove('done');
+      this.nextLbl.textContent = `التالي (آية ${next}):`;
+      this.nextTxt.textContent = texts[next - 1];
+    } else {
+      this.nextBox.hidden = true;
+    }
+  }
+}
+customElements.define('verse-stage', VerseStage);
+
+const normAr = (s = '') => String(s)
+  .replace(/[\u064B-\u065F\u0670]/g, '')
+  .replace(/[أإآ]/g, 'ا')
+  .replace(/ى/g, 'ي')
+  .replace(/ة/g, 'ه')
+  .toLowerCase();
+
+/* ------------------------------------------------------------------ */
+/* <smart-select>: searchable custom dropdown / combobox.             */
+/* ------------------------------------------------------------------ */
+class SmartSelect extends HTMLElement {
+  constructor() {
+    super();
+    this._items = [];
+    this._val = '';
+    this._active = -1;
+    this._onDocDown = (e) => {
+      if (this.hasAttribute('open') && !e.composedPath().includes(this)) this.close();
+    };
+    this.attachShadow({ mode: 'open' }).innerHTML = `
+      <style>
+        :host { display: block; position: relative; }
+        :host([open]) { z-index: 60; }
+        .trigger {
+          width: 100%; min-height: 38px; padding: 6px 10px; border-radius: 10px;
+          border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+          font: inherit; cursor: pointer; display: flex; align-items: center;
+          justify-content: space-between; gap: 8px; text-align: start;
+          transition: border-color 150ms ease, background-color 150ms ease;
+        }
+        :host([compact]) .trigger { min-height: 36px; padding: 5px 9px; font-size: 13.5px; }
+        .trigger:hover { border-color: var(--muted); }
+        :host([open]) .trigger { border-color: var(--accent); }
+        .trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .val-wrap { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+        .val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .val.placeholder { color: var(--muted); }
+        .val-badge {
+          font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+          background: var(--soft); color: var(--accent); white-space: nowrap; flex: none;
+        }
+        .chev { flex: none; width: 14px; height: 14px; color: var(--muted); transition: transform 150ms ease; }
+        :host([open]) .chev { transform: rotate(180deg); color: var(--accent); }
+        .menu {
+          position: absolute; inset-inline-start: 0; top: calc(100% + 6px);
+          min-width: 100%; width: max-content; max-width: min(360px, 90vw);
+          background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          box-shadow: 0 12px 32px rgba(0,0,0,.16); overflow: hidden;
+        }
+        :host([dropup]) .menu { top: auto; bottom: calc(100% + 6px); }
+        :host([compact]) .menu { min-width: 100%; }
+        .menu[hidden] { display: none; }
+        .search-wrap {
+          display: flex; align-items: center; gap: 6px; padding: 8px;
+          border-bottom: 1px solid var(--line); background: var(--panel-2);
+        }
+        .search-wrap[hidden] { display: none; }
+        .search-icon { width: 14px; height: 14px; color: var(--muted); flex: none; }
+        .search {
+          width: 100%; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--bg); color: var(--ink); font: inherit; font-size: 13px;
+          padding: 5px 8px; min-height: 30px;
+        }
+        .search:focus { outline: none; border-color: var(--accent); }
+        .list { max-height: 240px; overflow: auto; padding: 4px; scrollbar-width: thin; }
+        .opt {
+          width: 100%; border: 0; background: transparent; color: var(--ink); font: inherit;
+          font-size: 13.5px; padding: 7px 9px; border-radius: 8px; cursor: pointer;
+          display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: start;
+        }
+        .opt:hover:not(:disabled), .opt.active:not(:disabled) { background: var(--panel-2); }
+        .opt[aria-selected="true"] { background: var(--soft); color: var(--accent); font-weight: 600; }
+        .opt:disabled { opacity: .4; cursor: default; }
+        .opt-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .opt-right { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+        .opt-badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--soft); color: var(--accent); }
+        .check { font-size: 12px; color: var(--accent); }
+        .empty { padding: 14px; text-align: center; font-size: 13px; color: var(--muted); }
+      </style>
+      <button type="button" class="trigger" aria-haspopup="listbox" aria-expanded="false">
+        <span class="val-wrap"><span class="val"></span><span class="val-badge" hidden></span></span>
+        <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+      </button>
+      <div class="menu" hidden>
+        <div class="search-wrap" hidden>
+          <svg class="search-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14" stroke-linecap="round"/></svg>
+          <input type="search" class="search" placeholder="ابحث…" autocomplete="off">
+        </div>
+        <div class="list" role="listbox"></div>
+      </div>`;
+    this.trigger = this.shadowRoot.querySelector('.trigger');
+    this.valEl = this.shadowRoot.querySelector('.val');
+    this.valBadge = this.shadowRoot.querySelector('.val-badge');
+    this.menu = this.shadowRoot.querySelector('.menu');
+    this.searchWrap = this.shadowRoot.querySelector('.search-wrap');
+    this.searchInput = this.shadowRoot.querySelector('.search');
+    this.list = this.shadowRoot.querySelector('.list');
+
+    this.trigger.addEventListener('click', () => (this.hasAttribute('open') ? this.close() : this.open()));
+    this.trigger.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); e.stopPropagation();
+        this.open();
+      }
+    });
+    this.searchInput.addEventListener('input', () => { this._active = -1; this.renderList(); });
+    this.menu.addEventListener('keydown', (e) => this.onKey(e));
+    this.list.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.opt:not(:disabled)')) e.preventDefault();
+    });
+    this.list.addEventListener('click', (e) => {
+      const btn = e.target.closest('.opt');
+      if (!btn || btn.disabled) return;
+      this.pick(btn.dataset.val);
+    });
+    this.updateTrigger();
+  }
+  connectedCallback() { document.addEventListener('pointerdown', this._onDocDown); }
+  disconnectedCallback() { document.removeEventListener('pointerdown', this._onDocDown); }
+  get value() { return this._val; }
+  set value(v) {
+    this._val = v == null ? '' : String(v);
+    this.updateTrigger();
+    if (this.hasAttribute('open')) this.renderList();
+  }
+  setItems(items) {
+    this._items = (items || []).map((it) => ({
+      value: String(it.value),
+      label: String(it.label ?? it.value),
+      badge: it.badge || '',
+      disabled: !!it.disabled,
+    }));
+    const cur = this._items.find((it) => it.value === this._val && !it.disabled);
+    if (!cur) {
+      const first = this._items.find((it) => !it.disabled) || this._items[0];
+      this._val = first ? first.value : '';
+    }
+    this.updateTrigger();
+    if (this.hasAttribute('open')) this.renderList();
+  }
+  setEnabledValues(allowed) {
+    if (!allowed || !allowed.length) {
+      this._items.forEach((it) => { it.disabled = false; });
+    } else {
+      const set = new Set(allowed.map(String));
+      this._items.forEach((it) => { it.disabled = !set.has(it.value); });
+    }
+    this.updateTrigger();
+    if (this.hasAttribute('open')) this.renderList();
+  }
+  updateTrigger() {
+    const cur = this._items.find((it) => it.value === this._val);
+    if (cur) {
+      this.valEl.textContent = cur.label;
+      this.valEl.classList.remove('placeholder');
+      this.valBadge.textContent = cur.badge;
+      this.valBadge.hidden = !cur.badge;
+    } else {
+      this.valEl.textContent = this.getAttribute('placeholder') || '—';
+      this.valEl.classList.add('placeholder');
+      this.valBadge.hidden = true;
+    }
+  }
+  open() {
+    if (SmartSelect._open && SmartSelect._open !== this) SmartSelect._open.close();
+    SmartSelect._open = this;
+    this.setAttribute('open', '');
+    this.trigger.setAttribute('aria-expanded', 'true');
+    this.menu.hidden = false;
+    const showSearch = this.hasAttribute('searchable') || this._items.length > 8;
+    this.searchWrap.hidden = !showSearch;
+    this.searchInput.value = '';
+    this._active = -1;
+    this.renderList();
+    if (showSearch) setTimeout(() => this.searchInput.focus(), 0);
+    else {
+      const sel = this.list.querySelector('.opt[aria-selected="true"]') || this.list.querySelector('.opt:not(:disabled)');
+      sel?.focus();
+    }
+  }
+  close() {
+    if (SmartSelect._open === this) SmartSelect._open = null;
+    this.removeAttribute('open');
+    this.trigger.setAttribute('aria-expanded', 'false');
+    this.menu.hidden = true;
+  }
+  filtered() {
+    const q = normAr(this.searchInput.value.trim());
+    return q ? this._items.filter((it) => normAr(it.label).includes(q) || normAr(it.badge).includes(q)) : this._items;
+  }
+  renderList() {
+    const rows = this.filtered();
+    if (!rows.length) {
+      this.list.replaceChildren(el('div', { class: 'empty' }, 'لا توجد نتائج'));
+      return;
+    }
+    this.list.replaceChildren(...rows.map((it, idx) => {
+      const sel = it.value === this._val;
+      const badge = it.badge || (it.disabled ? 'غير متوفرة' : '');
+      const btn = el('button', {
+        type: 'button',
+        class: `opt${idx === this._active ? ' active' : ''}`,
+        role: 'option',
+        'data-val': it.value,
+        'aria-selected': sel ? 'true' : 'false',
+        disabled: it.disabled,
+      },
+      el('span', { class: 'opt-lbl' }, it.label),
+      el('span', { class: 'opt-right' },
+        badge ? el('span', { class: 'opt-badge' }, badge) : null,
+        sel ? el('span', { class: 'check' }, '✓') : null));
+      return btn;
+    }));
+    if (this._active < 0) {
+      this.list.querySelector('.opt[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }
+  pick(v) {
+    const changed = this._val !== v;
+    this._val = v;
+    this.updateTrigger();
+    this.close();
+    this.trigger.focus();
+    if (changed) this.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  onKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault(); e.stopPropagation();
+      this.close(); this.trigger.focus(); return;
+    }
+    const opts = [...this.list.querySelectorAll('.opt:not(:disabled)')];
+    if (!opts.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); e.stopPropagation();
+      const dir = e.key === 'ArrowDown' ? 1 : -1;
+      const curIdx = opts.findIndex((o) => o.classList.contains('active'));
+      const nextIdx = curIdx < 0 ? (dir > 0 ? 0 : opts.length - 1) : (curIdx + dir + opts.length) % opts.length;
+      opts.forEach((o, i) => o.classList.toggle('active', i === nextIdx));
+      opts[nextIdx].scrollIntoView?.({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); e.stopPropagation();
+      const act = this.list.querySelector('.opt.active:not(:disabled)') || opts[0];
+      if (act) this.pick(act.dataset.val);
+    }
+  }
+}
+customElements.define('smart-select', SmartSelect);
+
+/* ------------------------------------------------------------------ */
+/* <file-drop>: custom drag-and-drop file uploader.                   */
+/* ------------------------------------------------------------------ */
+class FileDrop extends HTMLElement {
+  constructor() {
+    super();
+    this._file = null;
+    this.attachShadow({ mode: 'open' }).innerHTML = `
+      <style>
+        :host { display: block; }
+        input[type="file"] { display: none; }
+        .zone {
+          display: flex; align-items: center; justify-content: center; gap: 10px;
+          padding: 10px 14px; min-height: 54px; border-radius: 12px;
+          border: 1.5px dashed var(--line); background: var(--panel-2);
+          cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease;
+          text-align: start;
+        }
+        :host([compact]) .zone { min-height: 40px; padding: 6px 10px; border-radius: 10px; }
+        .zone:hover, .zone:focus-visible { border-color: var(--accent); outline: none; }
+        .zone.drag { border-style: solid; border-color: var(--accent); background: var(--soft); }
+        .icon { flex: none; width: 20px; height: 20px; color: var(--accent); }
+        .empty { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+        :host([compact]) .empty { flex-direction: row; align-items: center; gap: 8px; }
+        .title { font-size: 13px; font-weight: 600; color: var(--ink); }
+        .sub { font-size: 11.5px; color: var(--muted); }
+        .picked { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; }
+        .picked[hidden], .empty[hidden] { display: none; }
+        .finfo { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+        .fname { direction: ltr; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+        .fsize { direction: ltr; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+        .clear-btn {
+          border: 0; background: var(--soft); color: var(--ink); border-radius: 7px;
+          width: 24px; height: 24px; cursor: pointer; font-size: 12px; flex: none;
+          display: inline-flex; align-items: center; justify-content: center;
+        }
+        .clear-btn:hover { color: var(--danger); background: var(--danger-bg); }
+      </style>
+      <input type="file">
+      <div class="zone" role="button" tabindex="0">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <div class="empty">
+          <span class="title"></span>
+          <span class="sub"></span>
+        </div>
+        <div class="picked" hidden>
+          <div class="finfo"><span class="fname"></span><span class="fsize"></span></div>
+          <button type="button" class="clear-btn" title="إزالة الملف">✕</button>
+        </div>
+      </div>`;
+    this.input = this.shadowRoot.querySelector('input');
+    this.zone = this.shadowRoot.querySelector('.zone');
+    this.emptyBox = this.shadowRoot.querySelector('.empty');
+    this.titleEl = this.shadowRoot.querySelector('.title');
+    this.subEl = this.shadowRoot.querySelector('.sub');
+    this.pickedBox = this.shadowRoot.querySelector('.picked');
+    this.fnameEl = this.shadowRoot.querySelector('.fname');
+    this.fsizeEl = this.shadowRoot.querySelector('.fsize');
+    this.clearBtn = this.shadowRoot.querySelector('.clear-btn');
+
+    this.syncAttrs();
+    this.zone.addEventListener('click', (e) => { if (!e.target.closest('.clear-btn')) this.input.click(); });
+    this.zone.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); this.input.click(); }
+    });
+    this.input.addEventListener('change', () => {
+      const f = this.input.files?.[0] || null;
+      if (f) this.setFile(f, true);
+    });
+    this.zone.addEventListener('dragenter', (e) => { e.preventDefault(); this.zone.classList.add('drag'); });
+    this.zone.addEventListener('dragover', (e) => { e.preventDefault(); this.zone.classList.add('drag'); });
+    this.zone.addEventListener('dragleave', (e) => {
+      if (!this.zone.contains(e.relatedTarget)) this.zone.classList.remove('drag');
+    });
+    this.zone.addEventListener('drop', (e) => {
+      e.preventDefault(); this.zone.classList.remove('drag');
+      const f = e.dataTransfer?.files?.[0];
+      if (f) this.setFile(f, true);
+    });
+    this.clearBtn.addEventListener('click', (e) => { e.stopPropagation(); this.clear(true); });
+  }
+  static get observedAttributes() { return ['accept', 'label', 'hint']; }
+  attributeChangedCallback() { this.syncAttrs(); }
+  syncAttrs() {
+    this.input.accept = this.getAttribute('accept') || '';
+    this.titleEl.textContent = this.getAttribute('label') || 'اسحب الملف هنا أو انقر للاختيار';
+    const h = this.getAttribute('hint') || '';
+    this.subEl.textContent = h;
+    this.subEl.hidden = !h;
+  }
+  get file() { return this._file; }
+  get files() { return this._file ? [this._file] : []; }
+  fmtSize(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1048576).toFixed(1) + ' MB';
+  }
+  setFile(f, emit = false) {
+    this._file = f || null;
+    if (this._file) {
+      this.fnameEl.textContent = this._file.name;
+      this.fsizeEl.textContent = this._file.size != null ? this.fmtSize(this._file.size) : '';
+      this.emptyBox.hidden = true;
+      this.pickedBox.hidden = false;
+    } else {
+      this.emptyBox.hidden = false;
+      this.pickedBox.hidden = true;
+    }
+    if (emit) this.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  clear(emit = false) {
+    this._file = null;
+    this.input.value = '';
+    this.emptyBox.hidden = false;
+    this.pickedBox.hidden = true;
+    if (emit) this.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+customElements.define('file-drop', FileDrop);
+
+/* ------------------------------------------------------------------ */
+/* <mushaf-view>: full-surah Mushaf reader with Warsh/Qalun/Hafs font.*/
+/* ------------------------------------------------------------------ */
+class MushafView extends HTMLElement {
+  constructor() {
+    super();
+    this._lastKey = '';
+    this._lastCur = -1;
+    this.attachShadow({ mode: 'open' }).innerHTML = `
+      <style>
+        :host { display: block; }
+        .wrap { max-height: 580px; overflow: auto; border: 1px solid var(--line); border-radius: 12px;
+                background: var(--panel-2); padding: 14px 16px; scrollbar-width: thin; }
+        .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+                padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+        .sname { font-family: var(--quran-font); font-size: 24px; font-weight: 700; color: var(--accent); }
+        .meta { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+        .pill { background: var(--soft); color: var(--accent); padding: 2px 9px; border-radius: 999px; font-weight: 700; }
+        .basmala { font-family: var(--quran-font); font-size: 26px; text-align: center;
+                   color: var(--ink); margin: 4px 0 14px; }
+        .body { font-family: var(--quran-font); font-size: 28px; line-height: 2.35;
+                text-align: justify; color: var(--ink); }
+        .v { cursor: pointer; border-radius: 6px; padding: 1px 3px; transition: background-color 120ms ease; }
+        .v:hover { background: var(--soft); }
+        .v.marked { color: var(--ink); }
+        .v:not(.marked) { opacity: .82; }
+        .v.now { background: var(--verse); box-shadow: 0 0 0 1px var(--accent); opacity: 1; }
+        .num { color: var(--accent); font-size: .92em; padding-inline: 2px; }
+        .empty { text-align: center; padding: 36px 12px; color: var(--muted); font-size: 13.5px; }
+      </style>
+      <div class="wrap">
+        <div class="head">
+          <span class="sname">سورة الفاتحة</span>
+          <div class="meta"><span class="pill">مصحف حفص</span><span class="pages"></span></div>
+        </div>
+        <div class="basmala" hidden>بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</div>
+        <div class="body"></div>
+      </div>`;
+    this.sname = this.shadowRoot.querySelector('.sname');
+    this.riwEl = this.shadowRoot.querySelector('.pill');
+    this.pagesEl = this.shadowRoot.querySelector('.pages');
+    this.basmalaEl = this.shadowRoot.querySelector('.basmala');
+    this.body = this.shadowRoot.querySelector('.body');
+    this.body.addEventListener('click', (e) => {
+      const v = e.target.closest('.v');
+      if (!v) return;
+      this.dispatchEvent(new CustomEvent('play', { detail: { ayah: +v.dataset.ayah } }));
+    });
+  }
+  render({ surah, texts, pages, starts, current, riwayah }) {
+    const arD = (n) => String(n).replace(/\d/g, (d) => '٠١٢٣٤٥٦٧٨٩'[d]);
+    this.sname.textContent = `سورة ${SURAHS[surah - 1] || ''}`;
+    this.riwEl.textContent = riwayah === 'warsh' ? 'مصحف ورش' : riwayah === 'qalun' ? 'مصحف قالون' : 'مصحف حفص';
+    const validPages = (pages || []).filter(Boolean);
+    if (validPages.length) {
+      const p0 = validPages[0], p1 = validPages[validPages.length - 1];
+      this.pagesEl.textContent = p0 === p1 ? `ص ${arD(p0)}` : `ص ${arD(p0)}–${arD(p1)}`;
+    } else this.pagesEl.textContent = '';
+
+    const showBasmala = surah !== 9 && !(surah === 1 && riwayah === 'hafs');
+    this.basmalaEl.hidden = !showBasmala || !texts;
+
+    const key = `${surah}:${riwayah}:${texts ? texts.length : 0}`;
+    if (key !== this._lastKey) {
+      this._lastKey = key;
+      if (!texts || !texts.length) {
+        this.body.replaceChildren(el('div', { class: 'empty' }, 'جارٍ تحميل نص المصحف…'));
+        return;
+      }
+      const isMadaniFont = riwayah === 'warsh' || riwayah === 'qalun';
+      this.body.replaceChildren(...texts.map((t, i) => {
+        const a = i + 1;
+        const num = isMadaniFont ? `\u00A0${arD(a)}` : ` ﴿${a}﴾`;
+        return el('span', { class: 'v', 'data-ayah': a }, t, el('span', { class: 'num' }, num), ' ');
+      }));
+    }
+    const spans = this.body.querySelectorAll('.v');
+    spans.forEach((sp, i) => {
+      const a = i + 1;
+      sp.classList.toggle('marked', starts?.[a] != null);
+      sp.classList.toggle('now', a === current);
+    });
+    if (current > 0 && current !== this._lastCur) {
+      this._lastCur = current;
+      const active = spans[current - 1];
+      if (active && this.offsetParent !== null) active.scrollIntoView?.({ block: 'nearest' });
+    }
+  }
+}
+customElements.define('mushaf-view', MushafView);
+
+/* ------------------------------------------------------------------ */
 /* <ayah-timer>: the app.                                               */
 /* ------------------------------------------------------------------ */
 class AyahTimer extends HTMLElement {
   connectedCallback() {
     this.state = {
       surah: 1, counting: 'hafs', starts: [0], duration: 0, label: '',
-      source: 'mp3quran', reaction: 250, snap: true, texts: null,
+      source: 'mp3quran', riwayah: 'all', reaction: 250, snap: true, texts: null, pages: null,
     };
+    try {
+      const savedTheme = localStorage.getItem('ayah-timer:theme');
+      if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
+    } catch {}
     this.audio = new Audio(); this.audio.preload = 'auto';
     this.energy = null;
     this.stopAt = null; this.audioBlobUrl = null; this.loadSeq = 0;
+    this.mushafCache = {}; this.mushafPromise = {};
     this.build();
     this.audio.addEventListener('timeupdate', () => this.tick());
     this.audio.addEventListener('play', () => this.loop());
@@ -369,111 +1133,171 @@ class AyahTimer extends HTMLElement {
   build() {
     const $ = (id) => this.querySelector('#' + id);
     this.innerHTML = `
-      <header class="top">
-        <h1>مؤقِّت الآيات</h1>
-        <p>حمّل تلاوة سورة كاملة، وعلِّم بداية كل آية أثناء الاستماع أو بالاقتراح التلقائي، ثم صدِّر ملف JSON بصيغة <span dir="ltr">mp3quran ayat_timing</span>.</p>
-        <button class="ghost" id="theme" title="الوضع الفاتح/الداكن">فاتح/داكن</button>
+      <header class="topbar">
+        <div class="brand">
+          <svg viewBox="0 0 32 32" aria-hidden="true">
+            <rect width="32" height="32" rx="8" fill="var(--accent)"/>
+            <path d="M6 20v-8M10 23V9M14 18v-4M18 25V7M22 21v-10M26 17v-2" stroke="var(--accent-ink)" stroke-width="2.4" stroke-linecap="round"/>
+          </svg>
+          <div>
+            <h1>مؤقِّت الآيات</h1>
+            <p>توقيت آيات السورة وتصديرها بصيغة <span dir="ltr">mp3quran ayat_timing</span></p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <progress-meter id="meter"></progress-meter>
+          <button class="ghost" id="theme" title="الوضع الفاتح/الداكن">◐ المظهر</button>
+        </div>
       </header>
 
-      <section class="panel">
-        <h2>١. التلاوة والسورة</h2>
-        <div class="tabs" role="tablist">
-          <button role="tab" data-src="mp3quran" aria-selected="true">من mp3quran</button>
-          <button role="tab" data-src="file">ملف من جهازك</button>
-          <button role="tab" data-src="url">رابط</button>
+      <section class="panel source-panel">
+        <div class="panel-head">
+          <h2>١. التلاوة والسورة</h2>
+          <div class="panel-head-left">
+            <div class="segmented" role="tablist" aria-label="مصدر التلاوة">
+              <button role="tab" data-src="mp3quran" aria-selected="true">من mp3quran</button>
+              <button role="tab" data-src="file">ملف من جهازك</button>
+              <button role="tab" data-src="url">رابط</button>
+            </div>
+            <span class="status" id="status" aria-live="polite"></span>
+          </div>
         </div>
-        <div class="row" data-pane="mp3quran">
-          <label class="field grow">القارئ <select id="reciter"><option>جارٍ التحميل…</option></select></label>
-          <label class="field grow">المصحف/الرواية <select id="moshaf"></select></label>
-        </div>
-        <div class="row hidden" data-pane="file">
-          <input type="file" id="file" accept="audio/*" class="grow">
-        </div>
-        <div class="row hidden" data-pane="url">
-          <input id="url" class="grow" placeholder="https://…/001.mp3" dir="ltr">
-        </div>
-        <div class="row" style="margin-top:8px">
-          <label class="field">السورة <select id="surah"></select></label>
-          <label class="field">العدّ <select id="counting">
-            <option value="hafs">الكوفي (حفص، شعبة)</option>
-            <option value="madani">المدني (ورش، قالون)</option>
-          </select></label>
-          <span class="badge" id="count"></span>
-          <button class="primary" id="load">تحميل التلاوة</button>
-          <span class="status" id="status"></span>
+        <div class="source-grid">
+          <div class="field span-2" data-pane="mp3quran">
+            <span>الرواية (تصفية سريعة)</span>
+            <div class="segmented" role="tablist" aria-label="تصفية حسب الرواية">
+              <button type="button" role="tab" data-riw="all" aria-selected="true">الكل</button>
+              <button type="button" role="tab" data-riw="hafs">حفص</button>
+              <button type="button" role="tab" data-riw="warsh">ورش</button>
+              <button type="button" role="tab" data-riw="qalun">قالون</button>
+            </div>
+          </div>
+          <div class="field" data-pane="mp3quran"><span>القارئ</span><smart-select id="reciter" searchable placeholder="جارٍ التحميل…"></smart-select></div>
+          <div class="field" data-pane="mp3quran"><span>المصحف/الرواية</span><smart-select id="moshaf" placeholder="اختر الرواية…"></smart-select></div>
+          <div class="field span-2 hidden" data-pane="file"><span>ملف صوتي</span><file-drop id="file" accept="audio/*" label="اسحب ملف التلاوة هنا أو انقر للاختيار" hint="MP3 · M4A · WAV · OGG"></file-drop></div>
+          <label class="field span-2 hidden" data-pane="url">رابط الملف الصوتي <input id="url" placeholder="https://…/001.mp3" dir="ltr"></label>
+          <div class="field"><span>السورة</span><smart-select id="surah" searchable placeholder="اختر السورة…"></smart-select></div>
+          <div class="field"><span>العدّ</span><smart-select id="counting"></smart-select></div>
+          <div class="source-actions">
+            <span class="badge" id="count"></span>
+            <button class="primary" id="load">تحميل التلاوة</button>
+          </div>
         </div>
         <p class="hint">العدّ يحدد عدد الآيات. يُضبط تلقائيًا من رواية mp3quran، ويمكن تغييره.</p>
       </section>
 
-      <section class="panel">
-        <h2>٢. الاستماع والتعليم</h2>
-        <div class="verse-now" id="verseNow">—</div>
-        <wave-view id="wave" style="margin-top:10px"></wave-view>
-        <div class="seek">
-          <span class="clock" id="seekNow">0:00.00</span>
-          <input type="range" id="seekbar" min="0" max="0" step="10" value="0" aria-label="موضع التشغيل" disabled>
-          <span class="clock" id="seekEnd">0:00.00</span>
-        </div>
-        <div class="transport" style="margin-top:10px">
-          <button class="big primary" id="mark" title="Space">علِّم الآية التالية ⏎</button>
-          <button id="play" title="P">▶ تشغيل</button>
-          <button id="back" title="←">−٥ث</button>
-          <button id="fwd" title="→">+٥ث</button>
-          <span class="clock" id="clock">0:00.00 / 0:00.00</span>
-          <label class="field">السرعة <select id="rate">
-            <option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option>
-          </select></label>
-          <label class="field">تأخّر الضغط (ms) <input type="number" id="reaction" value="250" step="50" min="0"></label>
-          <label class="field" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="snap" checked style="min-height:auto"> التصاق بأقرب سكتة</label>
-        </div>
-        <div class="row" style="margin-top:10px">
-          <button id="auto" title="يملأ الآيات غير المعلَّمة من سكتات التلاوة وطول الآيات، ويُبقي ما علَّمته">✨ اقتراح تلقائي</button>
-          <button id="undo" title="Z">↶ تراجع عن آخر علامة</button>
-          <button class="ghost" id="reset">مسح كل العلامات</button>
-          <span class="status" id="progress"></span>
-        </div>
-        <div class="keys">
-          <span><kbd>Space</kbd> علِّم الآية التالية</span><span><kbd>P</kbd> تشغيل/إيقاف</span>
-          <span><kbd>←</kbd><kbd>→</kbd> ٥ ثوانٍ</span><span><kbd>Z</kbd> تراجع</span>
-          <span>اسحب العلامة على الموجة لتعديلها، وانقر الموجة للانتقال.</span>
-          <span>في السور الطويلة: علِّم آية كل بضع صفحات يدويًا ثم اضغط «اقتراح تلقائي» ليملأ ما بينها.</span>
-        </div>
-      </section>
+      <div class="workspace">
+        <div class="studio-col">
+          <verse-stage id="stage"></verse-stage>
 
-      <div class="split">
-        <section class="panel">
-          <h2>٣. الآيات</h2>
-          <ayah-table id="table"></ayah-table>
-        </section>
-        <section class="panel">
-          <h2>٤. الاستيراد والتصدير</h2>
-          <div class="row">
-            <button class="primary" id="download">⬇ تنزيل JSON</button>
-            <button id="copy">نسخ</button>
-            <label class="field" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="full" checked style="min-height:auto"> حقول mp3quran الكاملة</label>
-          </div>
-          <textarea id="json" spellcheck="false" placeholder="[ { &quot;ayah&quot;: 0, &quot;start_time&quot;: 0, &quot;end_time&quot;: … } ]"></textarea>
-          <div class="row" style="margin-top:8px">
-            <button id="import">استيراد من النص أعلاه</button>
-            <input type="file" id="importFile" accept=".json,application/json" class="grow">
-          </div>
-          <div class="row" style="margin-top:8px">
-            <button id="fetchTiming">جلب توقيت mp3quran لهذه التلاوة (إن وُجد)</button>
-          </div>
-          <p class="hint">الصيغة: مصفوفة بعناصر <span dir="ltr">{ayah, start_time, end_time}</span> بالمللي ثانية. الآية 0 هي ما قبل الآية الأولى (الاستعاذة والبسملة). يُحفظ عملك في هذا المتصفح تلقائيًا.</p>
-        </section>
+          <section class="panel studio-panel">
+            <div class="panel-head">
+              <h2>٢. الاستماع والتعليم</h2>
+              <span class="status" id="progress"></span>
+            </div>
+            <wave-view id="wave"></wave-view>
+            <div class="seek">
+              <span class="clock" id="seekNow">0:00.00</span>
+              <input type="range" id="seekbar" min="0" max="0" step="10" value="0" aria-label="موضع التشغيل" disabled>
+              <span class="clock" id="seekEnd">0:00.00</span>
+            </div>
+            <div class="dock">
+              <div class="dock-main">
+                <button class="hero-mark primary" id="mark" title="Space"><span id="markLabel">علِّم الآية التالية</span><kbd>Space</kbd></button>
+                <div class="btn-group">
+                  <button id="back" title="←">−٥ث</button>
+                  <button id="play" title="P">▶ تشغيل</button>
+                  <button id="fwd" title="→">+٥ث</button>
+                </div>
+                <span class="clock-chip" id="clock">0:00.00 / 0:00.00</span>
+              </div>
+              <div class="dock-sub">
+                <div class="dock-tools">
+                  <button id="auto" title="يملأ الآيات غير المعلَّمة من سكتات التلاوة وطول الآيات، ويُبقي ما علَّمته">✨ اقتراح تلقائي</button>
+                  <button id="undo" title="Z">↶ تراجع</button>
+                  <button class="danger-ghost" id="reset">مسح الكل</button>
+                </div>
+                <div class="dock-tuning">
+                  <div class="field"><span>السرعة</span><smart-select id="rate" compact dropup></smart-select></div>
+                  <label class="field">تأخّر الضغط (ms) <input type="number" id="reaction" value="250" step="50" min="0"></label>
+                  <label class="check"><input type="checkbox" id="snap" checked> التصاق بأقرب سكتة</label>
+                </div>
+              </div>
+            </div>
+            <div class="keys">
+              <span><kbd>Space</kbd> علِّم التالية</span>
+              <span><kbd>P</kbd> تشغيل/إيقاف</span>
+              <span><kbd>←</kbd><kbd>→</kbd> ٥ ثوانٍ</span>
+              <span><kbd>Z</kbd> تراجع</span>
+              <span>اسحب العلامة على الموجة لتعديلها أو انقر للانتقال.</span>
+            </div>
+          </section>
+        </div>
+
+        <aside class="inspector-col">
+          <section class="panel inspector-panel">
+            <div class="panel-head">
+              <div class="segmented" role="tablist" aria-label="عرض الجانب">
+                <button role="tab" data-itab="table" aria-selected="true">الآيات <span class="pill" id="tableCount">0/0</span></button>
+                <button role="tab" data-itab="mushaf">المصحف</button>
+                <button role="tab" data-itab="io">JSON واستيراد</button>
+              </div>
+              <button class="ghost sm" id="quickDownload" title="تنزيل JSON">⬇ JSON</button>
+            </div>
+            <div data-ipane="table">
+              <ayah-table id="table"></ayah-table>
+            </div>
+            <div data-ipane="mushaf" class="hidden">
+              <mushaf-view id="mushaf"></mushaf-view>
+            </div>
+            <div data-ipane="io" class="hidden">
+              <div class="row">
+                <button class="primary" id="download">⬇ تنزيل JSON</button>
+                <button id="copy">نسخ</button>
+                <label class="check"><input type="checkbox" id="full" checked> حقول mp3quran الكاملة</label>
+              </div>
+              <textarea id="json" spellcheck="false" placeholder="[ { &quot;ayah&quot;: 0, &quot;start_time&quot;: 0, &quot;end_time&quot;: … } ]"></textarea>
+              <div class="row" style="margin-top:8px">
+                <button id="import">استيراد من النص أعلاه</button>
+                <file-drop id="importFile" accept=".json,application/json" compact class="grow" label="اسحب ملف JSON هنا أو انقر للاستيراد" hint="mp3quran ayat_timing"></file-drop>
+              </div>
+              <div class="row" style="margin-top:8px">
+                <button id="fetchTiming" class="grow">جلب توقيت mp3quran لهذه التلاوة (إن وُجد)</button>
+              </div>
+              <p class="hint">الصيغة: مصفوفة بعناصر <span dir="ltr">{ayah, start_time, end_time}</span> بالمللي ثانية. الآية 0 هي ما قبل الآية الأولى (الاستعاذة والبسملة). يُحفظ عملك في هذا المتصفح تلقائيًا.</p>
+            </div>
+          </section>
+        </aside>
       </div>
-      <p class="hint">النص المعروض: رواية حفص من <a href="https://alquran.cloud" target="_blank" rel="noopener">alquran.cloud</a>. التلاوات والتوقيتات من <a href="https://www.mp3quran.net" target="_blank" rel="noopener">mp3quran.net</a>.</p>`;
+
+      <footer class="foot">النصوص: حفص من <a href="https://alquran.cloud" target="_blank" rel="noopener">alquran.cloud</a> · مصحف ورش وقالون من <a href="https://github.com/thetruetruth/quran-data-kfgqpc" target="_blank" rel="noopener">KFGQPC</a> · التلاوات والتوقيتات من <a href="https://www.mp3quran.net" target="_blank" rel="noopener">mp3quran.net</a></footer>`;
     this.$ = $;
-    this.wave = $('wave'); this.table = $('table');
-    $('surah').append(...SURAHS.map((n, i) => el('option', { value: i + 1 }, `${i + 1}. ${n}`)));
-    this.querySelectorAll('[role=tab]').forEach((b) => b.addEventListener('click', () => this.setSource(b.dataset.src)));
+    this.wave = $('wave'); this.table = $('table'); this.stage = $('stage'); this.meter = $('meter'); this.mushaf = $('mushaf');
+    $('surah').setItems(SURAHS.map((n, i) => ({ value: String(i + 1), label: `${i + 1}. ${n}` })));
+    $('counting').setItems([
+      { value: 'hafs', label: 'الكوفي (حفص، شعبة)' },
+      { value: 'madani', label: 'المدني (ورش، قالون)' },
+    ]);
+    $('counting').value = 'hafs';
+    $('rate').setItems(['0.75', '1', '1.25', '1.5', '2'].map((v) => ({ value: v, label: `${v}×` })));
+    $('rate').value = '1';
+    this.querySelectorAll('[data-src]').forEach((b) => b.addEventListener('click', () => this.setSource(b.dataset.src)));
+    this.querySelectorAll('[data-riw]').forEach((b) => b.addEventListener('click', () => this.setRiwayah(b.dataset.riw)));
+    this.querySelectorAll('[data-itab]').forEach((b) => b.addEventListener('click', () => {
+      const tab = b.dataset.itab;
+      this.querySelectorAll('[data-itab]').forEach((x) => x.setAttribute('aria-selected', x.dataset.itab === tab));
+      this.querySelectorAll('[data-ipane]').forEach((p) => p.classList.toggle('hidden', p.dataset.ipane !== tab));
+      if (tab === 'mushaf') this.refresh();
+    }));
     $('surah').addEventListener('change', (e) => this.setSurah(+e.target.value));
-    $('counting').addEventListener('change', (e) => { this.state.counting = e.target.value; this.restore(); });
+    $('counting').addEventListener('change', (e) => {
+      this.state.counting = e.target.value;
+      this.state.texts = null; this.loadText(); this.restore();
+    });
     $('reciter').addEventListener('change', () => this.fillMoshaf());
     $('moshaf').addEventListener('change', () => this.pickedMoshaf());
     $('load').addEventListener('click', () => this.load());
-    $('file').addEventListener('change', () => this.load());
+    $('file').addEventListener('change', () => { if ($('file').file) this.load(); });
     $('mark').addEventListener('click', () => this.mark());
     $('play').addEventListener('click', () => this.toggle());
     $('back').addEventListener('click', () => this.seek(this.nowMs() - 5000));
@@ -497,17 +1321,20 @@ class AyahTimer extends HTMLElement {
     $('undo').addEventListener('click', () => this.undo());
     $('reset').addEventListener('click', () => { if (confirmReset()) { this.state.starts = [0]; this.changed(); } });
     $('download').addEventListener('click', () => this.download());
+    $('quickDownload').addEventListener('click', () => this.download());
     $('copy').addEventListener('click', () => navigator.clipboard.writeText(this.json()).then(() => this.say('نُسخ.')));
     $('full').addEventListener('change', () => this.refresh());
     $('import').addEventListener('click', () => this.importText($('json').value));
-    $('importFile').addEventListener('change', async (e) => {
-      const f = e.target.files[0]; if (f) this.importText(await f.text());
+    $('importFile').addEventListener('change', async () => {
+      const f = $('importFile').file; if (f) this.importText(await f.text());
     });
     $('fetchTiming').addEventListener('click', () => this.fetchTiming());
     $('theme').addEventListener('click', () => {
       const r = document.documentElement, dark = r.dataset.theme
         ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
-      r.dataset.theme = dark ? 'light' : 'dark'; this.wave.draw();
+      r.dataset.theme = dark ? 'light' : 'dark';
+      try { localStorage.setItem('ayah-timer:theme', r.dataset.theme); } catch {}
+      this.wave.draw();
     });
     this.wave.addEventListener('seek', (e) => this.seek(e.detail.ms));
     this.wave.addEventListener('markmove', (e) => this.setStart(e.detail.ayah, e.detail.ms));
@@ -516,6 +1343,7 @@ class AyahTimer extends HTMLElement {
     this.table.addEventListener('nudge', (e) => this.setStart(e.detail.ayah, (this.state.starts[e.detail.ayah] ?? 0) + e.detail.by));
     this.table.addEventListener('edit', (e) => this.setStart(e.detail.ayah, e.detail.ms));
     this.table.addEventListener('clear', (e) => this.setStart(e.detail.ayah, null));
+    this.mushaf.addEventListener('play', (e) => this.playAyah(e.detail.ayah));
     function confirmReset() { return window.confirm('مسح كل العلامات لهذه السورة؟'); }
   }
 
@@ -532,11 +1360,24 @@ class AyahTimer extends HTMLElement {
     this.wave.data = { peaks: null, duration: 0 };
   }
   setSource(src) {
-    if (src !== this.state.source) { this.clearAudio(); this.say(''); }
+    if (src !== this.state.source) {
+      this.clearAudio(); this.say('');
+      if (this.state.source === 'file') this.$('file')?.clear?.();
+    }
     this.state.source = src;
-    this.querySelectorAll('[role=tab]').forEach((b) => b.setAttribute('aria-selected', b.dataset.src === src));
+    this.querySelectorAll('[data-src]').forEach((b) => b.setAttribute('aria-selected', b.dataset.src === src));
     this.querySelectorAll('[data-pane]').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== src));
+    if (src !== 'mp3quran') this.$('surah').setEnabledValues(null);
+    else this.pickedMoshaf();
     this.restore();
+  }
+  setRiwayah(riw) {
+    this.state.riwayah = riw;
+    this.querySelectorAll('[data-riw]').forEach((b) => b.setAttribute('aria-selected', b.dataset.riw === riw));
+    this.fillReciters();
+  }
+  riwRegex(riw = this.state.riwayah) {
+    return riw === 'warsh' ? /ورش/ : riw === 'qalun' ? /قالون/ : riw === 'hafs' ? /حفص/ : null;
   }
   async loadReciters() {
     try {
@@ -544,29 +1385,46 @@ class AyahTimer extends HTMLElement {
         fetch(`${API}/reciters?language=ar`).then((r) => r.json()),
         fetch(`${API}/ayat_timing/reads`).then((r) => r.json()).catch(() => []),
       ]);
-      this.reciters = rec.reciters.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+      this.allReciters = rec.reciters.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
       const norm = (u) => u.replace(/^https?:\/\//, '').replace(/\/$/, '');
       this.timedReads = new Map(reads.map((r) => [norm(r.folder_url), r.id]));
       this.norm = norm;
-      const sel = this.$('reciter');
-      sel.replaceChildren(...this.reciters.map((r, i) => el('option', { value: i }, r.name)));
-      const afasy = this.reciters.findIndex((r) => r.name.includes('العفاسي'));
-      sel.value = afasy >= 0 ? afasy : 0;
-      this.fillMoshaf();
+      this.fillReciters();
     } catch (err) {
-      this.$('reciter').replaceChildren(el('option', {}, 'تعذّر تحميل القرّاء'));
+      this.$('reciter').setItems([{ value: '', label: 'تعذّر تحميل القرّاء', disabled: true }]);
       this.setSource('file');
     }
   }
+  fillReciters() {
+    if (!this.allReciters) return;
+    const rx = this.riwRegex();
+    this.reciters = rx
+      ? this.allReciters.filter((r) => r.moshaf.some((m) => rx.test(m.name)))
+      : this.allReciters;
+    const sel = this.$('reciter');
+    sel.setItems(this.reciters.map((r, i) => ({ value: String(i), label: r.name })));
+    let pick = -1;
+    if (this.state.riwayah === 'warsh') {
+      pick = this.reciters.findIndex((r) => r.name.includes('الكوشي'));
+      if (pick < 0) pick = this.reciters.findIndex((r) => r.moshaf.some((m) => /ورش/.test(m.name) && m.surah_total === 114));
+    } else if (this.state.riwayah === 'qalun') {
+      pick = this.reciters.findIndex((r) => r.name.includes('الحصري'));
+    } else {
+      pick = this.reciters.findIndex((r) => r.name.includes('العفاسي'));
+    }
+    sel.value = String(pick >= 0 ? pick : 0);
+    this.fillMoshaf();
+  }
   fillMoshaf() {
     const r = this.reciters?.[+this.$('reciter').value]; if (!r) return;
-    this.$('moshaf').replaceChildren(...r.moshaf.map((m, i) => {
-      const timed = this.timedReads.has(this.norm(m.server));
-      return el('option', { value: i }, `${m.name}${timed ? ' · له توقيت' : ''}`);
-    }));
-    // Hafs first when the reciter has it: it is what most timings are for.
-    const hafs = r.moshaf.findIndex((m) => m.name.includes('حفص'));
-    this.$('moshaf').value = hafs >= 0 ? hafs : 0;
+    this.$('moshaf').setItems(r.moshaf.map((m, i) => ({
+      value: String(i),
+      label: m.name,
+      badge: this.timedReads.has(this.norm(m.server)) ? 'له توقيت' : '',
+    })));
+    const rx = this.riwRegex() || /حفص/;
+    const idx = r.moshaf.findIndex((m) => rx.test(m.name));
+    this.$('moshaf').value = String(idx >= 0 ? idx : 0);
     this.pickedMoshaf();
   }
   moshaf() {
@@ -580,8 +1438,9 @@ class AyahTimer extends HTMLElement {
     this.$('counting').value = madani ? 'madani' : 'hafs';
     this.state.counting = this.$('counting').value;
     const has = (m.surah_list || '').split(',').map(Number).filter((x) => x >= 1 && x <= 114);
-    [...this.$('surah').options].forEach((o) => { o.disabled = !has.includes(+o.value); });
-    if (has.length && !has.includes(this.state.surah)) return this.setSurah(has[0]);
+    this.$('surah').setEnabledValues(this.state.source === 'mp3quran' && has.length ? has : null);
+    if (this.state.source === 'mp3quran' && has.length && !has.includes(this.state.surah)) return this.setSurah(has[0]);
+    this.state.texts = null; this.state.pages = null; this.loadText();
     this.restore();
   }
   audioUrl() {
@@ -599,7 +1458,7 @@ class AyahTimer extends HTMLElement {
     let blob, label, ctx = null;
     try {
       if (this.state.source === 'file') {
-        const f = this.$('file').files[0]; if (!f) return this.say('اختر ملفًا صوتيًا.', true);
+        const f = this.$('file').file || this.$('file').files?.[0]; if (!f) return this.say('اختر ملفًا صوتيًا.', true);
         blob = f; label = f.name;
       } else {
         const url = this.audioUrl(); if (!url) return this.say('لا يوجد رابط.', true);
@@ -666,8 +1525,8 @@ class AyahTimer extends HTMLElement {
   }
   setSurah(n) {
     if (this.state.source === 'mp3quran' && n !== this.state.surah) { this.clearAudio(); this.say(''); }
-    this.state.surah = n; this.$('surah').value = n;
-    this.state.texts = null; this.loadText(); this.restore();
+    this.state.surah = n; this.$('surah').value = String(n);
+    this.state.texts = null; this.state.pages = null; this.loadText(); this.restore();
   }
   restore() {
     this.$('count').textContent = `${this.count()} آية`;
@@ -680,11 +1539,50 @@ class AyahTimer extends HTMLElement {
     try { localStorage.setItem(this.storeKey(), JSON.stringify(this.state.starts)); } catch {}
     this.refresh();
   }
+  textEdition() {
+    if (this.state.counting === 'hafs') return 'hafs';
+    return /قالون/.test(this.moshaf()?.name || '') || this.state.riwayah === 'qalun' ? 'qalun' : 'warsh';
+  }
   async loadText() {
-    const surah = this.state.surah;
+    const surah = this.state.surah, ed = this.textEdition();
+    this.dataset.riwayah = ed;
     try {
-      const r = await fetch(`https://api.alquran.cloud/v1/surah/${surah}/quran-uthmani`).then((x) => x.json());
-      if (surah === this.state.surah) { this.state.texts = r.data.ayahs.map((a) => a.text); this.refresh(); }
+      let texts = null, pages = null;
+      if (ed === 'hafs') {
+        const r = await fetch(`https://api.alquran.cloud/v1/surah/${surah}/quran-uthmani`).then((x) => x.json());
+        const ayahs = r?.data?.ayahs;
+        if (ayahs) {
+          texts = ayahs.map((a) => a.text.replace(/^\uFEFF/, ''));
+          pages = ayahs.map((a) => a.page || null);
+        }
+      } else {
+        if (!this.mushafCache[ed]) {
+          const url = ed === 'qalun'
+            ? 'https://cdn.jsdelivr.net/gh/thetruetruth/quran-data-kfgqpc@main/qaloon/data/QaloonData_v10.json'
+            : 'https://cdn.jsdelivr.net/gh/thetruetruth/quran-data-kfgqpc@main/warsh/data/warshData_v10.json';
+          this.mushafPromise[ed] ||= fetch(url)
+            .then((x) => { if (!x.ok) throw new Error(x.status); return x.json(); })
+            .then((rows) => {
+              const grouped = Array.from({ length: 114 }, () => ({ texts: [], pages: [] }));
+              for (const row of rows) {
+                const s = grouped[row.sura_no - 1];
+                if (!s) continue;
+                s.texts.push(String(row.aya_text || '').replace(/[\s\u00A0]*[٠-٩]+$/, ''));
+                s.pages.push(Number(row.page) || null);
+              }
+              this.mushafCache[ed] = grouped;
+              return grouped;
+            })
+            .catch((err) => { delete this.mushafPromise[ed]; throw err; });
+          await this.mushafPromise[ed];
+        }
+        const entry = this.mushafCache[ed]?.[surah - 1];
+        texts = entry?.texts || null;
+        pages = entry?.pages || null;
+      }
+      if (texts && surah === this.state.surah && ed === this.textEdition()) {
+        this.state.texts = texts; this.state.pages = pages; this.refresh();
+      }
     } catch {}
   }
 
@@ -763,30 +1661,56 @@ class AyahTimer extends HTMLElement {
     this.stopAt = t.end != null && t.end > t.start ? t.end : null;
     this.audio.play().catch(() => {});
   }
-  // The pauses in the recording: where the voice drops for 120 ms or more,
-  // with the moment it comes back (a verse starts there) and how long it was.
-  pauses() {
+  // The pauses in the recording: where the voice drops, with the moment it
+  // comes back (a verse starts there) and how long it was. Relaxes sensitivity
+  // if fewer than [minNeeded] pauses are found.
+  pauses(minNeeded = 0) {
     const E = this.energy;
     const sorted = Float32Array.from(E).sort();
-    const floor = sorted[Math.floor(sorted.length * .2)], voice = sorted[Math.floor(sorted.length * .7)];
-    const quiet = floor + (voice - floor) * .18;
-    const gaps = [];
-    let i = 0, lastVoice = 0;
-    while (i < E.length) {
-      if (E[i] < quiet) {
-        let j = i; while (j < E.length && E[j] < quiet) j++;
-        if (j - i >= 12 && j < E.length - 5) gaps.push({ len: (j - i) * 10, at: Math.max(0, j * 10 - 60) });
-        i = j;
-      } else { lastVoice = i; i++; }
+    const floor = sorted[Math.floor(sorted.length * .15)], voice = sorted[Math.floor(sorted.length * .7)];
+    const span = Math.max(0, voice - floor);
+    let lastVoice = 0;
+    const baseQuiet = floor + span * .18;
+    for (let i = 0; i < E.length; i++) if (E[i] >= baseQuiet) lastVoice = i;
+    const end = lastVoice > 0 ? lastVoice * 10 : E.length * 10;
+    const scan = (ratio, minFrames) => {
+      const quiet = floor + span * ratio, out = [];
+      let i = 0;
+      while (i < E.length) {
+        if (E[i] < quiet) {
+          let j = i; while (j < E.length && E[j] < quiet) j++;
+          if (j - i >= minFrames && j < E.length - 3) out.push({ len: (j - i) * 10, at: Math.max(0, j * 10 - 60) });
+          i = j;
+        } else i++;
+      }
+      return out;
+    };
+    let gaps = scan(.18, 12);
+    if (gaps.length < minNeeded) gaps = scan(.26, 7);
+    if (gaps.length < minNeeded) gaps = scan(.36, 4);
+    if (!gaps.some((g) => g.at <= 150)) gaps.unshift({ len: 120, at: 0 });
+    if (gaps.length < minNeeded) {
+      const bins = Math.max(minNeeded * 2, 12);
+      const step = Math.max(8, Math.floor((end / 10) / bins));
+      for (let s = 4; s < E.length - 4; s += step) {
+        let bestI = s, low = E[s];
+        for (let k = s; k < Math.min(E.length - 3, s + step); k++) {
+          if (E[k] < low) { low = E[k]; bestI = k; }
+        }
+        const at = Math.max(0, bestI * 10 - 30);
+        if (!gaps.some((g) => Math.abs(g.at - at) < 120)) gaps.push({ len: 80, at });
+      }
+      gaps.sort((a, b) => a.at - b.at);
     }
-    return { gaps, end: lastVoice * 10 };
+    return { gaps, end };
   }
   // The letters of each verse (marks dropped), to expect how long it takes.
   verseLengths() {
     const texts = this.state.texts;
-    if (!texts || this.state.counting !== 'hafs' || texts.length !== this.count()) return null;
-    const letters = (t) => t.replace(/[^ء-يٱ]/g, '').length;
+    if (!texts || texts.length !== this.count()) return null;
+    const letters = (t) => t.replace(/[^ء-يٱىے]/g, '').length;
     return texts.map((t, i) => {
+      t = t.replace(/^\uFEFF/, '');
       // The text puts the basmala before verse 1 (but in al-Fatiha it is verse 1).
       if (i === 0 && this.state.surah !== 1 && this.state.surah !== 9 && t.startsWith('بِسْمِ')) {
         t = t.split(' ').slice(4).join(' ');
@@ -797,39 +1721,66 @@ class AyahTimer extends HTMLElement {
   // A first draft. With the text: of all the pauses, the set whose verses
   // best match their expected lengths, longer pauses preferred (a dynamic
   // programme, so one misleading mid-verse pause does not shift the rest).
-  // Without it (the Madani count has no text here): the longest pauses.
-  auto() {
+  async auto() {
     if (!this.energy) return this.say('حمّل التلاوة أولًا.', true);
-    const n = this.count(), { gaps, end } = this.pauses();
+    const n = this.count();
+    if (!this.state.texts || this.state.texts.length !== n) {
+      this.say('جارٍ تحميل نص السورة…');
+      await this.loadText();
+    }
+    let allMarked = true;
+    for (let a = 1; a <= n; a++) if (this.state.starts[a] == null) { allMarked = false; break; }
+    if (allMarked) {
+      if (!window.confirm('كل الآيات معلَّمة بالفعل. إعادة الاقتراح التلقائي من جديد؟')) return;
+      this.state.starts = [0];
+    }
+    const { gaps, end } = this.pauses(n);
     const lens = this.verseLengths();
-    if (!lens) {
+    const snapLocal = (ms, lo, hi) => {
+      const E = this.energy, at = Math.round(ms / 10);
+      let best = at, low = Infinity;
+      for (let i = Math.max(0, at - 40); i <= Math.min(E.length - 1, at + 40); i++) {
+        if (E[i] < low) { low = E[i]; best = i; }
+      }
+      return Math.max(lo, Math.min(hi, best * 10));
+    };
+    const fixed = this.state.starts.map((ms, a) => (a >= 1 && a <= n && ms != null ? ms : null));
+    const fillProportional = () => {
       const anchors = [[0, 0]];
-      for (let a = 1; a <= n; a++) if (this.state.starts[a] != null) anchors.push([a, this.state.starts[a]]);
+      for (let a = 1; a <= n; a++) if (fixed[a] != null) anchors.push([a, fixed[a]]);
       anchors.push([n + 1, end]);
-      const result = [0];
-      let missing = 0;
+      const out = new Array(n + 1).fill(null);
+      out[0] = 0;
       for (let k = 0; k < anchors.length - 1; k++) {
         const [a0, t0] = anchors[k], [a1, t1] = anchors[k + 1];
-        if (a0 > 0) result[a0] = t0;
+        if (a0 > 0) out[a0] = t0;
         const need = a1 - a0 - 1;
         if (need <= 0) continue;
-        const lo = a0 === 0 ? 0 : t0 + 50, hi = t1 - 50;
-        const picked = gaps.filter((g) => g.at >= lo && g.at <= hi)
-          .sort((a, b) => b.len - a.len).slice(0, need).sort((a, b) => a.at - b.at);
-        picked.forEach((g, i) => { result[a0 + 1 + i] = g.at; });
-        missing += need - picked.length;
+        const lo = a0 === 0 ? 0 : t0 + 40, hi = Math.max(lo + need * 40, t1 - 40);
+        const spanGaps = gaps.filter((g) => g.at >= lo && g.at <= hi);
+        if (spanGaps.length >= need) {
+          const picked = spanGaps.sort((a, b) => b.len - a.len).slice(0, need).sort((a, b) => a.at - b.at);
+          picked.forEach((g, i) => { out[a0 + 1 + i] = g.at; });
+        } else {
+          const weights = lens ? lens.slice(a0, a1) : new Array(need + 1).fill(1);
+          const sumW = weights.reduce((a, b) => a + b, 0) || (need + 1);
+          let acc = 0;
+          for (let i = 0; i < need; i++) {
+            acc += weights[i];
+            const prev = i === 0 ? lo : out[a0 + i] + 40;
+            const maxT = hi - (need - 1 - i) * 40;
+            const raw = t0 + (t1 - t0) * (acc / sumW);
+            out[a0 + 1 + i] = snapLocal(raw, prev, Math.max(prev, maxT));
+          }
+        }
       }
-      for (let a = 1; a <= n; a++) if (result[a] === undefined) result[a] = null;
-      while (result.length > 1 && result[result.length - 1] == null) result.pop();
-      this.state.starts = result;
+      return out.slice(1);
+    };
+    if (!lens) {
+      this.state.starts = [0, ...fillProportional()];
       this.changed();
-      return missing > 0
-        ? this.say(`نقصت ${missing} سكتة عن عدد الآيات: أكمل يدويًا.`, true)
-        : this.say('اقتراح أولي: راجِع العلامات واسحبها إن لزم.');
+      return this.say('اقتراح أولي: راجِع العلامات واسحبها إن لزم.');
     }
-    // Verses already marked by hand stay where they are: each becomes a pause
-    // of its own that only its verse may start at.
-    const fixed = this.state.starts.map((ms, a) => (a >= 1 && a <= n && ms != null ? ms : null));
     const points = [
       ...gaps.map((g) => ({ at: g.at, reward: Math.log(1 + g.len / 100), verse: 0 })),
       ...fixed.flatMap((ms, a) => (ms == null ? [] : [{ at: ms, reward: 0, verse: a }])),
@@ -839,62 +1790,58 @@ class AyahTimer extends HTMLElement {
       ? (k) => points[k].verse === 0
       : (k) => points[k].verse === verse;
     const K = t.length, total = lens.reduce((a, b) => a + b, 0);
-    if (K < n) return this.say(`وُجدت ${K} سكتة فقط لـ ${n} آية: علِّم يدويًا.`, true);
-    let rate = end / (total + 20); // ms per letter; the opening about 20
-    let best = null;
-    for (let pass = 0; pass < 2; pass++) {
-      const exp = lens.map((l) => l * rate);
-      const cost = (dur, e) => { const r = Math.log(Math.max(dur, 50) / e); return r * r; };
-      // Weight of a pause's length against fitting the verse lengths, and the
-      // opening's expected letters (the basmala): checked against mp3quran's own
-      // timings (Yasin 80/83 verses within 0.5 s, al-Mulk 28/30 within 1 s).
-      // ponytail: long surahs with many waqf pauses (al-Kahf) still go astray
-      // alone; a few verses marked by hand keep the draft on track.
-      const L = 0.45;
-      // dp[a][k]: verse a+1 starts at pause k; from[a][k]: where verse a started.
-      let dp = new Float64Array(K).fill(Infinity);
-      const from = [];
-      // The opening (isti'adha and basmala, about 40 letters) is short too.
-      const opening = 20 * rate;
-      const first = only(1);
-      for (let k = 0; k < K; k++) {
-        if (first(k) && (t[k] < end * .6 || fixed[1] != null)) dp[k] = cost(t[k], opening) - L * reward[k];
-      }
-      from.push(null);
-      for (let a = 1; a < n; a++) {
-        const next = new Float64Array(K).fill(Infinity), back = new Int32Array(K).fill(-1);
-        const e = exp[a - 1], lo = Math.max(250, e * .25), hi = e * 4 + 1500;
-        // Near a hand-marked verse the lengths may be off: allow any span.
-        const free = fixed[a] != null || fixed[a + 1] != null;
-        const allowed = only(a + 1);
-        let j0 = 0;
+    const solveDp = (strict) => {
+      if (K < n) return null;
+      let rate = end / (total + 20), best = null;
+      for (let pass = 0; pass < 2; pass++) {
+        const exp = lens.map((l) => l * rate);
+        const cost = (dur, e) => { const r = Math.log(Math.max(dur, 50) / e); return r * r; };
+        const L = 0.45;
+        let dp = new Float64Array(K).fill(Infinity);
+        const from = [];
+        const opening = 20 * rate;
+        const first = only(1);
         for (let k = 0; k < K; k++) {
-          if (!allowed(k)) continue;
-          while (!free && j0 < k && t[k] - t[j0] > hi) j0++;
-          let m = Infinity, arg = -1;
-          for (let j = free ? 0 : j0; j < k && t[k] - t[j] >= (free ? 50 : lo); j++) {
-            if (dp[j] === Infinity) continue;
-            const c = dp[j] + cost(t[k] - t[j], e);
-            if (c < m) { m = c; arg = j; }
-          }
-          if (arg >= 0) { next[k] = m - L * reward[k]; back[k] = arg; }
+          if (first(k) && (!strict || t[k] < end * .6 || fixed[1] != null)) dp[k] = cost(t[k], opening) - L * reward[k];
         }
-        dp = next; from.push(back);
+        from.push(null);
+        for (let a = 1; a < n; a++) {
+          const next = new Float64Array(K).fill(Infinity), back = new Int32Array(K).fill(-1);
+          const e = exp[a - 1];
+          const lo = strict ? Math.max(120, e * .12) : 40;
+          const hi = strict ? Math.max(e * 8 + 4000, 12000) : Infinity;
+          const free = !strict || fixed[a] != null || fixed[a + 1] != null;
+          const allowed = only(a + 1);
+          let j0 = 0;
+          for (let k = 0; k < K; k++) {
+            if (!allowed(k)) continue;
+            while (!free && j0 < k && t[k] - t[j0] > hi) j0++;
+            let m = Infinity, arg = -1;
+            for (let j = free ? 0 : j0; j < k && t[k] - t[j] >= (free ? 40 : lo); j++) {
+              if (dp[j] === Infinity) continue;
+              const c = dp[j] + cost(t[k] - t[j], e);
+              if (c < m) { m = c; arg = j; }
+            }
+            if (arg >= 0) { next[k] = m - L * reward[k]; back[k] = arg; }
+          }
+          dp = next; from.push(back);
+        }
+        let m = Infinity, last = -1;
+        const endMin = strict ? 150 : 30;
+        for (let k = 0; k < K; k++) {
+          if (dp[k] === Infinity || end - t[k] < endMin) continue;
+          const c = dp[k] + cost(end - t[k], exp[n - 1]);
+          if (c < m) { m = c; last = k; }
+        }
+        if (last < 0) break;
+        const idx = [last];
+        for (let a = n - 1; a >= 1; a--) idx.unshift(from[a][idx[0]]);
+        best = idx.map((k) => t[k]);
+        rate = Math.max(1, end - best[0]) / total;
       }
-      let m = Infinity, last = -1;
-      for (let k = 0; k < K; k++) {
-        if (dp[k] === Infinity || end - t[k] < 200) continue;
-        const c = dp[k] + cost(end - t[k], exp[n - 1]);
-        if (c < m) { m = c; last = k; }
-      }
-      if (last < 0) break;
-      const idx = [last];
-      for (let a = n - 1; a >= 1; a--) idx.unshift(from[a][idx[0]]);
-      best = idx.map((k) => t[k]);
-      // Again with the pace this reciter actually has.
-      rate = (end - best[0]) / total;
-    }
-    if (!best) return this.say('تعذّر الاقتراح: راجِع علاماتك اليدوية أو علِّم يدويًا.', true);
+      return best;
+    };
+    const best = solveDp(true) || solveDp(false) || fillProportional();
     this.state.starts = [0, ...best];
     this.changed();
     this.say('اقتراح أولي: راجِع العلامات واسحبها إن لزم.');
@@ -982,14 +1929,19 @@ class AyahTimer extends HTMLElement {
     const t = this.timeline(), cur = this.currentAyah(), n = this.count();
     const done = t.filter((r) => r.ayah > 0 && r.start != null).length;
     this.$('progress').textContent = `مُعلَّم ${done} من ${n}`;
+    this.meter?.update({ done, total: n });
+    const tc = this.$('tableCount'); if (tc) tc.textContent = `${done}/${n}`;
     this.$('play').textContent = this.audio.paused ? '▶ تشغيل' : '❚❚ إيقاف';
     const next = this.nextUnmarked();
-    this.$('mark').textContent = next ? `علِّم بداية الآية ${next}` : 'اكتمل التعليم ✓';
+    const markLbl = this.$('markLabel');
+    if (markLbl) markLbl.textContent = next ? `علِّم بداية الآية ${next}` : 'اكتمل التعليم ✓';
+    else this.$('mark').textContent = next ? `علِّم بداية الآية ${next}` : 'اكتمل التعليم ✓';
     this.$('mark').disabled = !this.state.duration || !next;
-    const texts = this.state.texts;
-    const shown = cur === 0 ? (next === 1 ? 'الافتتاح (الاستعاذة والبسملة)' : '—')
-      : texts && this.state.counting === 'hafs' ? `${texts[cur - 1] ?? ''} ﴿${cur}﴾` : `الآية ${cur}`;
-    this.$('verseNow').textContent = shown;
+    const ed = this.textEdition();
+    this.dataset.riwayah = ed;
+    const page = this.state.pages?.[Math.max(0, cur - 1)] || null;
+    this.stage?.update({ cur, next, texts: this.state.texts, riwayah: ed, page });
+    this.mushaf?.render({ surah: this.state.surah, texts: this.state.texts, pages: this.state.pages, starts: this.state.starts, current: cur, riwayah: ed });
     this.table.render({ count: n, timeline: t, current: cur });
     this.wave.update({ starts: this.state.starts, now: this.nowMs(), current: cur });
     if (document.activeElement !== this.$('json')) this.$('json').value = this.json();
@@ -1006,8 +1958,9 @@ class AyahTimer extends HTMLElement {
   }
   key(e) {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.composedPath?.().some((n) => n?.tagName === 'SMART-SELECT' && n.hasAttribute?.('open'))) return;
     const target = e.composedPath?.()[0] || e.target;
-    if (target?.closest?.('input, textarea, select')) return;
+    if (target?.closest?.('input, textarea, select, smart-select, file-drop')) return;
     const btn = target?.closest?.('button, a');
     if (btn && (e.code === 'Enter' || (e.code === 'Space' && btn.matches?.(':focus-visible')))) return;
     if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); this.mark(); }
