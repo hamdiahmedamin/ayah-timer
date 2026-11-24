@@ -1,7 +1,7 @@
 use iced::event::Status;
 use iced::mouse;
-use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke, Text};
-use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
+use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Text};
+use iced::{Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Theme};
 
 #[derive(Debug, Clone)]
 pub enum WaveEvent {
@@ -37,6 +37,7 @@ pub struct WaveformProgram<'a> {
     pub current_ayah: usize,
     pub zoom: f32,
     pub scroll_frac: f32,
+    pub font: Font,
     pub colors: WaveColors,
 }
 
@@ -180,11 +181,14 @@ impl<'a> canvas::Program<WaveEvent> for WaveformProgram<'a> {
 
         if self.peaks.is_empty() || self.duration_ms == 0 {
             frame.fill_text(Text {
-                content: "حمّل تلاوة لرسم موجتها".into(),
-                position: Point::new(w / 2.0, h / 2.0 - 7.0),
+                content: "\u{200E}\u{2067}حمّل تلاوة لرسم موجتها\u{2069}".into(),
+                position: Point::new(w / 2.0, h / 2.0),
                 color: self.colors.muted,
                 size: iced::Pixels(13.0),
+                font: self.font,
+                shaping: iced::widget::text::Shaping::Advanced,
                 horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Center,
                 ..Text::default()
             });
             return vec![frame.into_geometry()];
@@ -291,7 +295,6 @@ impl<'a> canvas::Program<WaveEvent> for WaveformProgram<'a> {
                 b.close();
             });
             frame.fill(&tri, self.colors.now);
-            let _ = Stroke::default();
         }
 
         vec![frame.into_geometry()]
@@ -299,5 +302,5 @@ impl<'a> canvas::Program<WaveEvent> for WaveformProgram<'a> {
 }
 
 pub fn view_waveform<'a>(prog: WaveformProgram<'a>) -> Element<'a, WaveEvent> {
-    Canvas::new(prog).width(Length::Fill).height(Length::Fixed(170.0)).into()
+    Canvas::new(prog).width(Length::Fill).height(Length::Fixed(138.0)).into()
 }

@@ -120,6 +120,7 @@ impl TextEdition {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Reciter {
+    #[allow(dead_code)]
     pub id: u64,
     pub name: String,
     pub moshaf: Vec<Moshaf>,
@@ -127,6 +128,7 @@ pub struct Reciter {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Moshaf {
+    #[allow(dead_code)]
     pub id: u64,
     pub name: String,
     pub server: String,
@@ -445,6 +447,37 @@ async fn download_cached_font(client: &reqwest::Client, filename: &str, url: &st
     };
     let fam = parse_ttf_family(&bytes);
     Some((bytes, fam))
+}
+
+pub fn load_cached_fonts_sync() -> LoadedFonts {
+    let mut out = LoadedFonts::default();
+    let dir = cache_dir().join("fonts");
+    let read_cached = |filename: &str| -> Option<(Vec<u8>, Option<String>)> {
+        let bytes = std::fs::read(dir.join(filename)).ok()?;
+        let fam = parse_ttf_family(&bytes);
+        Some((bytes, fam))
+    };
+
+    if let Some((b, fam)) = read_cached("IBMPlexSansArabic-Regular.ttf") {
+        out.ui_family = fam;
+        out.font_bytes.push(b);
+    }
+    if let Some((b, _)) = read_cached("IBMPlexSansArabic-SemiBold.ttf") {
+        out.font_bytes.push(b);
+    }
+    if let Some((b, fam)) = read_cached("AmiriQuran-Regular.ttf") {
+        out.quran_hafs_family = fam;
+        out.font_bytes.push(b);
+    }
+    if let Some((b, fam)) = read_cached("warsh.10.ttf") {
+        out.quran_warsh_family = fam;
+        out.font_bytes.push(b);
+    }
+    if let Some((b, fam)) = read_cached("qaloon.10.ttf") {
+        out.quran_qalun_family = fam;
+        out.font_bytes.push(b);
+    }
+    out
 }
 
 pub async fn ensure_fonts() -> LoadedFonts {

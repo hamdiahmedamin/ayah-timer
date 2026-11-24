@@ -24,7 +24,9 @@ pub struct AudioAnalysis {
 
 enum AudioCmd {
     Load(PathBuf, f32),
+    #[allow(dead_code)]
     Play,
+    #[allow(dead_code)]
     Pause,
     Toggle,
     Seek(u64),
@@ -215,6 +217,7 @@ impl AudioPlayer {
         let _ = self.tx.send(AudioCmd::Toggle);
     }
 
+    #[allow(dead_code)]
     pub fn pause(&self) {
         let _ = self.tx.send(AudioCmd::Pause);
     }

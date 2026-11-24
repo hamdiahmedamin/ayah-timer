@@ -13,6 +13,7 @@ const MODEL_BASE: &str =
 pub struct AiProgress {
     pub text: String,
     pub pct: Option<u8>,
+    #[allow(dead_code)]
     pub done: bool,
     pub err: Option<String>,
 }

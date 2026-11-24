@@ -4,26 +4,28 @@ mod quran;
 mod timing;
 mod waveform;
 
+use iced::event::{self, Event};
 use iced::keyboard::{self, key::Named, Key};
+use iced::overlay::menu;
 use iced::widget::{
-    button, checkbox, column, combo_box, container, progress_bar, row, scrollable, slider,
-    text, text_editor, text_input, Space,
+    button, checkbox, column, container, pick_list, progress_bar, row, scrollable, slider, text,
+    text_editor, text_input, Space,
 };
 use iced::{
-    alignment, border, Color, Element, Font, Length, Subscription, Task, Theme,
+    alignment, border, Color, Element, Font, Length, Padding, Subscription, Task, Theme,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use align::{auto_heuristic, ensure_ai_model, run_ai_alignment, AiProgress};
 use audio::{analyze_audio_file, AudioAnalysis, AudioPlayer};
 use quran::{
     ar_digits, cache_dir, ensure_fonts, fetch_published_timings, fetch_reciters_and_timed_reads,
-    fetch_surah_text, fmt_ms, http_client, norm_url, Counting, LoadedFonts, Moshaf, Reciter,
-    Riwayah, SurahText, TextEdition, SURAHS,
+    fetch_surah_text, fmt_ms, http_client, load_cached_fonts_sync, norm_url, Counting,
+    LoadedFonts, Moshaf, Reciter, Riwayah, SurahText, TextEdition, SURAHS,
 };
 use timing::{
     build_timeline, current_ayah, export_json, import_json, load_work, next_unmarked, save_work,
@@ -32,12 +34,85 @@ use timing::{
 use waveform::{view_waveform, WaveColors, WaveEvent, WaveformProgram};
 
 fn main() -> iced::Result {
-    iced::application("Ayah Timer · مؤقِّت الآيات", App::update, App::view)
+    let preloaded = load_cached_fonts_sync();
+    let mut app_builder = iced::application("Ayah Timer · مؤقِّت الآيات", App::update, App::view)
         .subscription(App::subscription)
         .theme(App::theme)
-        .window_size((1340.0, 860.0))
-        .run_with(App::new)
+        .window_size((1340.0, 860.0));
+    for bytes in &preloaded.font_bytes {
+        app_builder = app_builder.font(bytes.clone());
+    }
+    if let Some(fam) = preloaded.ui_family.as_deref() {
+        app_builder = app_builder.default_font(intern_font(fam));
+    }
+    app_builder.run_with(move || App::new(preloaded))
 }
+
+fn intern_font(name: &str) -> Font {
+    static CACHE: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut g = map.lock().unwrap();
+    let leaked: &'static str = if let Some(&s) = g.get(name) {
+        s
+    } else {
+        let s: &'static str = Box::leak(name.to_string().into_boxed_str());
+        g.insert(name.to_string(), s);
+        s
+    };
+    Font::with_name(leaked)
+}
+
+/// Wrap Arabic text in LRM + RLI..PDI so cosmic-text keeps paragraph level LTR
+/// (preventing `start_x = line_width` displacement in iced 0.13) while shaping
+/// the interior Arabic run RTL via HarfBuzz/rustybuzz.
+fn rtl(s: &str) -> String {
+    if s.is_empty() {
+        String::new()
+    } else {
+        format!("\u{200E}\u{2067}{s}\u{2069}")
+    }
+}
+
+fn ar<'a>(s: impl AsRef<str>, font: Font) -> text::Text<'a> {
+    text(rtl(s.as_ref()))
+        .font(font)
+        .shaping(text::Shaping::Advanced)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArOption {
+    idx: usize,
+    label: String,
+}
+
+impl ArOption {
+    fn new(idx: usize, raw: &str) -> Self {
+        Self {
+            idx,
+            label: rtl(raw),
+        }
+    }
+}
+
+impl std::fmt::Display for ArOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CountingOpt(Counting);
+
+impl std::fmt::Display for CountingOpt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&rtl(self.0.label()))
+    }
+}
+
+const COUNTING_OPTS: [CountingOpt; 2] = [
+    CountingOpt(Counting::Hafs),
+    CountingOpt(Counting::Madani),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceTab {
@@ -53,7 +128,7 @@ enum InspectorTab {
     Io,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct Palette {
     bg: Color,
     panel: Color,
@@ -62,6 +137,7 @@ struct Palette {
     muted: Color,
     line: Color,
     accent: Color,
+    accent_hover: Color,
     accent_ink: Color,
     soft: Color,
     wave: Color,
@@ -70,6 +146,7 @@ struct Palette {
     now: Color,
     verse: Color,
     danger: Color,
+    danger_soft: Color,
 }
 
 impl Palette {
@@ -77,11 +154,12 @@ impl Palette {
         Self {
             bg: Color::from_rgb8(0xf4, 0xf1, 0xe8),
             panel: Color::from_rgb8(0xff, 0xfd, 0xf8),
-            panel2: Color::from_rgb8(0xf8, 0xf5, 0xec),
+            panel2: Color::from_rgb8(0xf7, 0xf3, 0xe8),
             ink: Color::from_rgb8(0x1a, 0x22, 0x20),
             muted: Color::from_rgb8(0x5d, 0x6b, 0x67),
-            line: Color::from_rgb8(0xe2, 0xdc, 0xcb),
+            line: Color::from_rgb8(0xdf, 0xd8, 0xc7),
             accent: Color::from_rgb8(0x1f, 0x64, 0x54),
+            accent_hover: Color::from_rgb8(0x17, 0x4f, 0x42),
             accent_ink: Color::WHITE,
             soft: Color::from_rgb8(0xe2, 0xef, 0xe9),
             wave: Color::from_rgb8(0x9c, 0xb9, 0xaf),
@@ -90,6 +168,7 @@ impl Palette {
             now: Color::from_rgb8(0xc9, 0x92, 0x0e),
             verse: Color::from_rgba8(0x1f, 0x64, 0x54, 0.11),
             danger: Color::from_rgb8(0xb4, 0x23, 0x18),
+            danger_soft: Color::from_rgb8(0xfc, 0xec, 0xea),
         }
     }
 
@@ -102,6 +181,7 @@ impl Palette {
             muted: Color::from_rgb8(0x93, 0xa3, 0x9e),
             line: Color::from_rgb8(0x27, 0x33, 0x31),
             accent: Color::from_rgb8(0x6f, 0xd1, 0xb6),
+            accent_hover: Color::from_rgb8(0x88, 0xdd, 0xc6),
             accent_ink: Color::from_rgb8(0x0b, 0x14, 0x12),
             soft: Color::from_rgb8(0x1b, 0x2c, 0x28),
             wave: Color::from_rgb8(0x38, 0x52, 0x4d),
@@ -110,6 +190,7 @@ impl Palette {
             now: Color::from_rgb8(0xec, 0xc4, 0x5a),
             verse: Color::from_rgba8(0x6f, 0xd1, 0xb6, 0.12),
             danger: Color::from_rgb8(0xf9, 0x70, 0x66),
+            danger_soft: Color::from_rgb8(0x33, 0x18, 0x18),
         }
     }
 }
@@ -122,10 +203,10 @@ enum Message {
     SurahTextLoaded(usize, TextEdition, Result<SurahText, String>),
     SourceTabChanged(SourceTab),
     RiwayahChanged(Riwayah),
-    ReciterPicked(String),
-    MoshafPicked(String),
-    SurahPicked(String),
-    CountingPicked(Counting),
+    ReciterPicked(ArOption),
+    MoshafPicked(ArOption),
+    SurahPicked(ArOption),
+    CountingPicked(CountingOpt),
     PickAudioFile,
     AudioFilePicked(Option<PathBuf>),
     UrlChanged(String),
@@ -171,6 +252,11 @@ enum Message {
 struct App {
     dark: bool,
     fonts: LoadedFonts,
+    ui_font: Font,
+    hafs_font: Font,
+    warsh_font: Font,
+    qalun_font: Font,
+
     player: AudioPlayer,
     source_tab: SourceTab,
     riwayah: Riwayah,
@@ -182,11 +268,10 @@ struct App {
     selected_reciter: usize,
     selected_moshaf: usize,
 
-    reciter_combo: combo_box::State<String>,
-    moshaf_combo: combo_box::State<String>,
-    surah_combo: combo_box::State<String>,
-    counting_combo: combo_box::State<Counting>,
-    rate_combo: combo_box::State<String>,
+    reciter_opts: Vec<ArOption>,
+    moshaf_opts: Vec<ArOption>,
+    surah_opts: Vec<ArOption>,
+    rate_opts: Vec<String>,
 
     surah: usize,
     counting: Counting,
@@ -227,10 +312,19 @@ struct App {
 }
 
 impl App {
-    fn new() -> (Self, Task<Message>) {
+    fn new(preloaded: LoadedFonts) -> (Self, Task<Message>) {
+        let need_fonts = preloaded.ui_family.is_none()
+            || preloaded.quran_hafs_family.is_none()
+            || preloaded.quran_warsh_family.is_none()
+            || preloaded.quran_qalun_family.is_none();
+
         let mut app = Self {
             dark: false,
-            fonts: LoadedFonts::default(),
+            fonts: preloaded,
+            ui_font: Font::DEFAULT,
+            hafs_font: Font::DEFAULT,
+            warsh_font: Font::DEFAULT,
+            qalun_font: Font::DEFAULT,
             player: AudioPlayer::new(),
             source_tab: SourceTab::Mp3Quran,
             riwayah: Riwayah::All,
@@ -240,16 +334,13 @@ impl App {
             timed_reads: HashMap::new(),
             selected_reciter: 0,
             selected_moshaf: 0,
-            reciter_combo: combo_box::State::new(vec!["جارٍ التحميل…".into()]),
-            moshaf_combo: combo_box::State::new(vec![]),
-            surah_combo: combo_box::State::new(Self::surah_labels(None)),
-            counting_combo: combo_box::State::new(vec![Counting::Hafs, Counting::Madani]),
-            rate_combo: combo_box::State::new(
-                ["0.75", "1", "1.25", "1.5", "2"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
-            ),
+            reciter_opts: vec![ArOption::new(0, "جارٍ التحميل…")],
+            moshaf_opts: vec![],
+            surah_opts: Self::surah_options(None),
+            rate_opts: ["0.75", "1", "1.25", "1.5", "2"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
             surah: 1,
             counting: Counting::Hafs,
             file_path: None,
@@ -282,23 +373,55 @@ impl App {
             ai_progress_slot: Arc::new(Mutex::new(None)),
             ai_progress: None,
         };
+        app.sync_cached_fonts();
         app.restore_work();
 
-        let t_fonts = Task::perform(ensure_fonts(), Message::FontsLoaded);
-        let t_rec = Task::perform(
-            async { fetch_reciters_and_timed_reads().await.map_err(|e| e.to_string()) },
-            Message::RecitersLoaded,
-        );
-        let t_txt = app.load_text_task();
-        (app, Task::batch([t_fonts, t_rec, t_txt]))
+        let mut tasks = vec![
+            Task::perform(
+                async { fetch_reciters_and_timed_reads().await.map_err(|e| e.to_string()) },
+                Message::RecitersLoaded,
+            ),
+            app.load_text_task(),
+        ];
+        if need_fonts {
+            tasks.push(Task::perform(ensure_fonts(), Message::FontsLoaded));
+        }
+        (app, Task::batch(tasks))
     }
 
-    fn surah_labels(allowed: Option<&[usize]>) -> Vec<String> {
+    fn sync_cached_fonts(&mut self) {
+        self.ui_font = self
+            .fonts
+            .ui_family
+            .as_deref()
+            .map(intern_font)
+            .unwrap_or(Font::DEFAULT);
+        self.hafs_font = self
+            .fonts
+            .quran_hafs_family
+            .as_deref()
+            .map(intern_font)
+            .unwrap_or(self.ui_font);
+        self.warsh_font = self
+            .fonts
+            .quran_warsh_family
+            .as_deref()
+            .map(intern_font)
+            .unwrap_or(self.hafs_font);
+        self.qalun_font = self
+            .fonts
+            .quran_qalun_family
+            .as_deref()
+            .map(intern_font)
+            .unwrap_or(self.hafs_font);
+    }
+
+    fn surah_options(allowed: Option<&[usize]>) -> Vec<ArOption> {
         SURAHS
             .iter()
             .enumerate()
             .filter(|(i, _)| allowed.map(|a| a.contains(&(i + 1))).unwrap_or(true))
-            .map(|(i, name)| format!("{}. {name}", i + 1))
+            .map(|(i, name)| ArOption::new(i + 1, &format!("{}. {name}", i + 1)))
             .collect()
     }
 
@@ -324,23 +447,12 @@ impl App {
         )
     }
 
-    fn ui_font(&self) -> Font {
-        self.fonts
-            .ui_family
-            .as_deref()
-            .map(|n| Font::with_name(Box::leak(n.to_string().into_boxed_str())))
-            .unwrap_or(Font::DEFAULT)
-    }
-
     fn quran_font(&self) -> Font {
-        let fam = match self.text_edition() {
-            TextEdition::Warsh => self.fonts.quran_warsh_family.as_deref(),
-            TextEdition::Qalun => self.fonts.quran_qalun_family.as_deref(),
-            TextEdition::Hafs => None,
+        match self.text_edition() {
+            TextEdition::Warsh => self.warsh_font,
+            TextEdition::Qalun => self.qalun_font,
+            TextEdition::Hafs => self.hafs_font,
         }
-        .or(self.fonts.quran_hafs_family.as_deref());
-        fam.map(|n| Font::with_name(Box::leak(n.to_string().into_boxed_str())))
-            .unwrap_or_else(|| self.ui_font())
     }
 
     fn count(&self) -> usize {
@@ -454,8 +566,12 @@ impl App {
             .filter(|r| r.moshaf.iter().any(|m| self.riwayah.matches(&m.name)))
             .cloned()
             .collect();
-        let labels: Vec<String> = self.reciters.iter().map(|r| r.name.clone()).collect();
-        self.reciter_combo = combo_box::State::new(labels);
+        self.reciter_opts = self
+            .reciters
+            .iter()
+            .enumerate()
+            .map(|(i, r)| ArOption::new(i, &r.name))
+            .collect();
 
         let pick = match self.riwayah {
             Riwayah::Warsh => self
@@ -478,22 +594,23 @@ impl App {
 
     fn fill_moshaf(&mut self) -> Task<Message> {
         let Some(r) = self.reciters.get(self.selected_reciter) else {
-            self.moshaf_combo = combo_box::State::new(vec![]);
+            self.moshaf_opts = vec![];
             return Task::none();
         };
-        let labels: Vec<String> = r
+        self.moshaf_opts = r
             .moshaf
             .iter()
-            .map(|m| {
+            .enumerate()
+            .map(|(i, m)| {
                 let timed = self.timed_reads.contains_key(&norm_url(&m.server));
-                if timed {
+                let raw = if timed {
                     format!("{} · له توقيت", m.name)
                 } else {
                     m.name.clone()
-                }
+                };
+                ArOption::new(i, &raw)
             })
             .collect();
-        self.moshaf_combo = combo_box::State::new(labels);
 
         let idx = r
             .moshaf
@@ -524,12 +641,12 @@ impl App {
 
         let avail = m.available_surahs();
         if self.source_tab == SourceTab::Mp3Quran && !avail.is_empty() {
-            self.surah_combo = combo_box::State::new(Self::surah_labels(Some(&avail)));
+            self.surah_opts = Self::surah_options(Some(&avail));
             if !avail.contains(&self.surah) {
                 self.surah = avail[0];
             }
         } else {
-            self.surah_combo = combo_box::State::new(Self::surah_labels(None));
+            self.surah_opts = Self::surah_options(None);
         }
 
         self.surah_text = None;
@@ -564,10 +681,13 @@ impl App {
         match msg {
             Message::FontsLoaded(loaded) => {
                 let mut tasks = Vec::new();
-                for bytes in loaded.font_bytes.iter().cloned() {
-                    tasks.push(iced::font::load(bytes).map(Message::FontRegistered));
+                if loaded.font_bytes.len() > self.fonts.font_bytes.len() {
+                    for bytes in loaded.font_bytes.iter().cloned() {
+                        tasks.push(iced::font::load(bytes).map(Message::FontRegistered));
+                    }
                 }
                 self.fonts = loaded;
+                self.sync_cached_fonts();
                 return Task::batch(tasks);
             }
             Message::FontRegistered(_) => {}
@@ -578,9 +698,9 @@ impl App {
                 return self.load_text_task();
             }
             Message::RecitersLoaded(Err(_)) => {
-                self.reciter_combo = combo_box::State::new(vec!["تعذّر تحميل القرّاء".into()]);
+                self.reciter_opts = vec![ArOption::new(0, "تعذّر تحميل القرّاء")];
                 self.source_tab = SourceTab::File;
-                self.surah_combo = combo_box::State::new(Self::surah_labels(None));
+                self.surah_opts = Self::surah_options(None);
             }
             Message::SurahTextLoaded(surah, ed, Ok(st)) => {
                 if surah == self.surah && ed == self.text_edition() {
@@ -596,7 +716,7 @@ impl App {
                 }
                 self.source_tab = tab;
                 if tab != SourceTab::Mp3Quran {
-                    self.surah_combo = combo_box::State::new(Self::surah_labels(None));
+                    self.surah_opts = Self::surah_options(None);
                 } else {
                     return self.picked_moshaf();
                 }
@@ -607,36 +727,35 @@ impl App {
                 self.fill_reciters();
                 return self.load_text_task();
             }
-            Message::ReciterPicked(name) => {
-                if let Some(i) = self.reciters.iter().position(|r| r.name == name) {
-                    self.selected_reciter = i;
+            Message::ReciterPicked(opt) => {
+                if opt.idx < self.reciters.len() {
+                    self.selected_reciter = opt.idx;
                     return self.fill_moshaf();
                 }
             }
-            Message::MoshafPicked(label) => {
+            Message::MoshafPicked(opt) => {
                 if let Some(r) = self.reciters.get(self.selected_reciter) {
-                    if let Some(i) = r.moshaf.iter().position(|m| label.starts_with(&m.name)) {
-                        self.selected_moshaf = i;
+                    if opt.idx < r.moshaf.len() {
+                        self.selected_moshaf = opt.idx;
                         return self.picked_moshaf();
                     }
                 }
             }
-            Message::SurahPicked(label) => {
-                if let Some(num) = label.split('.').next().and_then(|s| s.trim().parse::<usize>().ok()) {
-                    if (1..=114).contains(&num) {
-                        if self.source_tab == SourceTab::Mp3Quran && num != self.surah {
-                            self.clear_audio();
-                            self.say("", false);
-                        }
-                        self.surah = num;
-                        self.surah_text = None;
-                        self.restore_work();
-                        return self.load_text_task();
+            Message::SurahPicked(opt) => {
+                let num = opt.idx;
+                if (1..=114).contains(&num) {
+                    if self.source_tab == SourceTab::Mp3Quran && num != self.surah {
+                        self.clear_audio();
+                        self.say("", false);
                     }
+                    self.surah = num;
+                    self.surah_text = None;
+                    self.restore_work();
+                    return self.load_text_task();
                 }
             }
-            Message::CountingPicked(c) => {
-                self.counting = c;
+            Message::CountingPicked(opt) => {
+                self.counting = opt.0;
                 self.surah_text = None;
                 self.restore_work();
                 return self.load_text_task();
@@ -1161,44 +1280,233 @@ impl App {
 
     fn subscription(&self) -> Subscription<Message> {
         let tick = iced::time::every(Duration::from_millis(50)).map(|_| Message::Tick);
-        let keys = keyboard::on_key_press(|key, mods| Some(Message::KeyPressed(key, mods)));
+        let keys = event::listen_with(|ev, status, _| {
+            if status == event::Status::Ignored {
+                if let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = ev {
+                    return Some(Message::KeyPressed(key, modifiers));
+                }
+            }
+            None
+        });
         Subscription::batch([tick, keys])
     }
 
-    fn card<'a>(&self, content: impl Into<Element<'a, Message>>) -> container::Container<'a, Message> {
+    fn card<'a>(&self, content: impl Into<Element<'a, Message>>, pad: u16) -> container::Container<'a, Message> {
         let p = self.pal();
-        container(content).padding(14).style(move |_| container::Style {
+        container(content).padding(pad).style(move |_| container::Style {
             background: Some(p.panel.into()),
             border: border::Border {
                 color: p.line,
                 width: 1.0,
-                radius: 14.0.into(),
+                radius: 12.0.into(),
             },
             ..Default::default()
         })
     }
 
-    fn seg_btn<'a>(&self, label: &'a str, active: bool, msg: Message) -> Element<'a, Message> {
+    fn btn_primary<'a>(
+        &self,
+        label: impl Into<Element<'a, Message>>,
+        pad: impl Into<Padding>,
+        msg: Option<Message>,
+    ) -> button::Button<'a, Message> {
         let p = self.pal();
-        button(text(label).size(13))
-            .padding([6, 12])
-            .on_press(msg)
-            .style(move |_, _| button::Style {
-                background: Some(if active { p.accent } else { p.panel2 }.into()),
-                text_color: if active { p.accent_ink } else { p.muted },
+        let b = button(label).padding(pad).style(move |_, status| {
+            let bg = match status {
+                button::Status::Hovered | button::Status::Pressed => p.accent_hover,
+                button::Status::Disabled => p.line,
+                button::Status::Active => p.accent,
+            };
+            let fg = if status == button::Status::Disabled {
+                p.muted
+            } else {
+                p.accent_ink
+            };
+            button::Style {
+                background: Some(bg.into()),
+                text_color: fg,
                 border: border::Border {
-                    color: p.line,
-                    width: if active { 0.0 } else { 1.0 },
                     radius: 8.0.into(),
+                    ..Default::default()
                 },
                 ..Default::default()
+            }
+        });
+        if let Some(m) = msg {
+            b.on_press(m)
+        } else {
+            b
+        }
+    }
+
+    fn btn_soft<'a>(
+        &self,
+        label: impl Into<Element<'a, Message>>,
+        pad: impl Into<Padding>,
+        msg: Message,
+    ) -> button::Button<'a, Message> {
+        let p = self.pal();
+        button(label).padding(pad).on_press(msg).style(move |_, status| button::Style {
+            background: Some(if status == button::Status::Hovered { p.panel2 } else { p.soft }.into()),
+            text_color: p.accent,
+            border: border::Border {
+                color: p.accent,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        })
+    }
+
+    fn btn_ghost<'a>(
+        &self,
+        label: impl Into<Element<'a, Message>>,
+        pad: impl Into<Padding>,
+        msg: Message,
+    ) -> button::Button<'a, Message> {
+        let p = self.pal();
+        button(label).padding(pad).on_press(msg).style(move |_, status| button::Style {
+            background: Some(if status == button::Status::Hovered { p.soft } else { p.panel2 }.into()),
+            text_color: p.ink,
+            border: border::Border {
+                color: p.line,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        })
+    }
+
+    fn btn_danger<'a>(
+        &self,
+        label: impl Into<Element<'a, Message>>,
+        pad: impl Into<Padding>,
+        msg: Message,
+    ) -> button::Button<'a, Message> {
+        let p = self.pal();
+        button(label).padding(pad).on_press(msg).style(move |_, status| button::Style {
+            background: Some(if status == button::Status::Hovered { p.danger_soft } else { p.panel2 }.into()),
+            text_color: p.danger,
+            border: border::Border {
+                color: p.danger,
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        })
+    }
+
+    fn styled_input<'a>(
+        &self,
+        placeholder: &str,
+        value: &str,
+        on_input: impl Fn(String) -> Message + 'a,
+        size: f32,
+        pad: impl Into<Padding>,
+        width: Length,
+    ) -> text_input::TextInput<'a, Message> {
+        let p = self.pal();
+        text_input(placeholder, value)
+            .on_input(on_input)
+            .font(self.ui_font)
+            .size(size)
+            .padding(pad)
+            .width(width)
+            .style(move |_, status| text_input::Style {
+                background: p.panel2.into(),
+                border: border::Border {
+                    color: if status == text_input::Status::Focused {
+                        p.accent
+                    } else {
+                        p.line
+                    },
+                    width: 1.0,
+                    radius: 7.0.into(),
+                },
+                icon: p.muted,
+                placeholder: p.muted,
+                value: p.ink,
+                selection: p.soft,
+            })
+    }
+
+    fn seg_btn<'a>(&self, label: &'a str, active: bool, msg: Message) -> Element<'a, Message> {
+        let p = self.pal();
+        button(ar(label, self.ui_font).size(12.5))
+            .padding([5, 11])
+            .on_press(msg)
+            .style(move |_, status| {
+                let bg = if active {
+                    p.accent
+                } else if status == button::Status::Hovered {
+                    p.soft
+                } else {
+                    p.panel2
+                };
+                button::Style {
+                    background: Some(bg.into()),
+                    text_color: if active { p.accent_ink } else { p.muted },
+                    border: border::Border {
+                        color: p.line,
+                        width: if active { 0.0 } else { 1.0 },
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                }
             })
             .into()
     }
 
+    fn styled_pick<'a, T>(
+        &self,
+        options: &'a [T],
+        selected: Option<T>,
+        on_selected: impl Fn(T) -> Message + 'a,
+        placeholder: &str,
+        width: Length,
+    ) -> pick_list::PickList<'a, T, &'a [T], T, Message>
+    where
+        T: ToString + PartialEq + Clone + 'a,
+    {
+        let p = self.pal();
+        pick_list(options, selected, on_selected)
+            .placeholder(rtl(placeholder))
+            .font(self.ui_font)
+            .text_shaping(text::Shaping::Advanced)
+            .text_size(12.5)
+            .padding([6, 10])
+            .width(width)
+            .style(move |_, status| pick_list::Style {
+                text_color: p.ink,
+                placeholder_color: p.muted,
+                handle_color: p.muted,
+                background: p.panel2.into(),
+                border: border::Border {
+                    color: if status == pick_list::Status::Hovered || status == pick_list::Status::Opened {
+                        p.accent
+                    } else {
+                        p.line
+                    },
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+            })
+            .menu_style(move |_| menu::Style {
+                background: p.panel.into(),
+                border: border::Border {
+                    color: p.line,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                text_color: p.ink,
+                selected_text_color: p.accent_ink,
+                selected_background: p.accent.into(),
+            })
+    }
+
     fn view(&self) -> Element<'_, Message> {
         let p = self.pal();
-        let ui = self.ui_font();
+        let ui = self.ui_font;
         let qfont = self.quran_font();
         let n_ayahs = self.count();
         let done_count = (1..=n_ayahs)
@@ -1210,28 +1518,25 @@ impl App {
             0.0
         };
 
-        // Header
+        // Header (RTL: controls on Left, title on Right)
         let header = row![
-            column![
-                text("مؤقِّت الآيات").size(22).font(ui),
-                text("تطبيق سطح مكتب أصلي بالـ Rust لتوقيت الآيات بالذكاء الاصطناعي")
-                    .size(12)
-                    .color(p.muted)
-                    .font(ui),
-            ]
-            .spacing(2),
-            Space::with_width(Length::Fill),
+            self.btn_ghost(
+                ar(if self.dark { "فاتح" } else { "داكن" }, ui).size(12.5),
+                [7, 12],
+                Message::ToggleTheme,
+            ),
             container(
                 column![
                     row![
-                        text(format!("مُعلَّم {done_count} من {n_ayahs}")).size(12).font(ui),
                         text(format!("{}%", pct.round() as u32)).size(12).color(p.accent),
+                        Space::with_width(Length::Fill),
+                        ar(format!("مُعلَّم {done_count} من {n_ayahs}"), ui).size(12),
                     ]
-                    .spacing(10),
+                    .align_y(alignment::Vertical::Center),
                     progress_bar(0.0..=100.0, pct).height(5),
                 ]
                 .spacing(4)
-                .width(Length::Fixed(170.0))
+                .width(Length::Fixed(180.0))
             )
             .padding([6, 12])
             .style(move |_| container::Style {
@@ -1239,105 +1544,123 @@ impl App {
                 border: border::Border {
                     color: p.line,
                     width: 1.0,
-                    radius: 11.0.into(),
+                    radius: 10.0.into(),
                 },
                 ..Default::default()
             }),
-            button(text(if self.dark { "☀ فاتح" } else { "◐ داكن" }).size(13).font(ui))
-                .padding([8, 12])
-                .on_press(Message::ToggleTheme),
+            Space::with_width(Length::Fill),
+            column![
+                ar("مؤقِّت الآيات", ui).size(20),
+                ar("توقيت آيات القرآن الكريم بالذكاء الاصطناعي", ui)
+                    .size(11.5)
+                    .color(p.muted),
+            ]
+            .align_x(alignment::Horizontal::Right)
+            .spacing(2),
         ]
-        .spacing(12)
+        .spacing(10)
         .align_y(alignment::Vertical::Center);
 
-        // Source panel
+        // Source panel (RTL)
         let source_tabs = row![
-            self.seg_btn("من mp3quran", self.source_tab == SourceTab::Mp3Quran, Message::SourceTabChanged(SourceTab::Mp3Quran)),
-            self.seg_btn("ملف من جهازك", self.source_tab == SourceTab::File, Message::SourceTabChanged(SourceTab::File)),
             self.seg_btn("رابط", self.source_tab == SourceTab::Url, Message::SourceTabChanged(SourceTab::Url)),
+            self.seg_btn("ملف من جهازك", self.source_tab == SourceTab::File, Message::SourceTabChanged(SourceTab::File)),
+            self.seg_btn("من mp3quran", self.source_tab == SourceTab::Mp3Quran, Message::SourceTabChanged(SourceTab::Mp3Quran)),
         ]
         .spacing(4);
 
-        let status_txt = text(&self.status)
+        let status_txt = ar(&self.status, ui)
             .size(12)
-            .color(if self.status_err { p.danger } else { p.muted })
-            .font(ui);
+            .color(if self.status_err { p.danger } else { p.muted });
 
         let riw_bar = row![
-            self.seg_btn("الكل", self.riwayah == Riwayah::All, Message::RiwayahChanged(Riwayah::All)),
-            self.seg_btn("حفص", self.riwayah == Riwayah::Hafs, Message::RiwayahChanged(Riwayah::Hafs)),
-            self.seg_btn("ورش", self.riwayah == Riwayah::Warsh, Message::RiwayahChanged(Riwayah::Warsh)),
-            self.seg_btn("قالون", self.riwayah == Riwayah::Qalun, Message::RiwayahChanged(Riwayah::Qalun)),
+            self.seg_btn(Riwayah::Qalun.label(), self.riwayah == Riwayah::Qalun, Message::RiwayahChanged(Riwayah::Qalun)),
+            self.seg_btn(Riwayah::Warsh.label(), self.riwayah == Riwayah::Warsh, Message::RiwayahChanged(Riwayah::Warsh)),
+            self.seg_btn(Riwayah::Hafs.label(), self.riwayah == Riwayah::Hafs, Message::RiwayahChanged(Riwayah::Hafs)),
+            self.seg_btn(Riwayah::All.label(), self.riwayah == Riwayah::All, Message::RiwayahChanged(Riwayah::All)),
         ]
         .spacing(4);
 
-        let cur_rec_label = self.reciters.get(self.selected_reciter).map(|r| r.name.clone());
-        let cur_moshaf_label = self.current_moshaf().map(|m| m.name.clone());
-        let cur_surah_label = Some(format!("{}. {}", self.surah, SURAHS[self.surah - 1]));
+        let cur_rec = self.reciter_opts.get(self.selected_reciter).cloned();
+        let cur_moshaf = self.moshaf_opts.get(self.selected_moshaf).cloned();
+        let cur_surah = self.surah_opts.iter().find(|o| o.idx == self.surah).cloned();
 
         let src_inputs: Element<'_, Message> = match self.source_tab {
             SourceTab::Mp3Quran => row![
-                column![text("الرواية").size(11).color(p.muted).font(ui), riw_bar].spacing(4),
                 column![
-                    text("القارئ").size(11).color(p.muted).font(ui),
-                    combo_box(&self.reciter_combo, "ابحث عن قارئ…", cur_rec_label.as_ref(), Message::ReciterPicked)
-                        .width(Length::FillPortion(2))
+                    ar("المصحف/الرواية", ui).size(11).color(p.muted),
+                    self.styled_pick(
+                        &self.moshaf_opts,
+                        cur_moshaf,
+                        Message::MoshafPicked,
+                        "اختر الرواية…",
+                        Length::Fill,
+                    ),
                 ]
-                .spacing(4)
+                .align_x(alignment::Horizontal::Right)
+                .spacing(3)
                 .width(Length::FillPortion(2)),
                 column![
-                    text("المصحف/الرواية").size(11).color(p.muted).font(ui),
-                    combo_box(&self.moshaf_combo, "اختر الرواية…", cur_moshaf_label.as_ref(), Message::MoshafPicked)
-                        .width(Length::FillPortion(2))
+                    ar("القارئ", ui).size(11).color(p.muted),
+                    self.styled_pick(
+                        &self.reciter_opts,
+                        cur_rec,
+                        Message::ReciterPicked,
+                        "اختر القارئ…",
+                        Length::Fill,
+                    ),
                 ]
-                .spacing(4)
+                .align_x(alignment::Horizontal::Right)
+                .spacing(3)
                 .width(Length::FillPortion(2)),
+                column![
+                    ar("الرواية", ui).size(11).color(p.muted),
+                    riw_bar,
+                ]
+                .align_x(alignment::Horizontal::Right)
+                .spacing(3),
             ]
-            .spacing(10)
+            .spacing(8)
             .align_y(alignment::Vertical::Bottom)
+            .width(Length::Fill)
             .into(),
             SourceTab::File => row![
-                button(text("📂 اختر ملفًا صوتيًا (MP3 / WAV / FLAC / M4A)…").size(13).font(ui))
-                    .padding([9, 14])
-                    .on_press(Message::PickAudioFile),
-                text(
+                ar(
                     self.file_path
                         .as_ref()
-                        .and_then(|p| p.file_name())
+                        .and_then(|fp| fp.file_name())
                         .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "لم يُختر ملف".into())
+                        .unwrap_or_else(|| "لم يُختر ملف".into()),
+                    ui,
                 )
                 .size(12)
-                .color(p.muted)
-                .font(ui),
+                .color(p.muted),
+                Space::with_width(Length::Fill),
+                self.btn_ghost(
+                    ar("اختر ملفًا صوتيًا (MP3 / WAV / FLAC / M4A)…", ui).size(12.5),
+                    [7, 14],
+                    Message::PickAudioFile,
+                ),
             ]
             .spacing(10)
             .align_y(alignment::Vertical::Center)
+            .width(Length::Fill)
             .into(),
             SourceTab::Url => row![
-                text_input("https://…/001.mp3", &self.url_input)
-                    .on_input(Message::UrlChanged)
-                    .width(Length::Fill),
+                self.styled_input("https://…/001.mp3", &self.url_input, Message::UrlChanged, 13.0, [6, 10], Length::Fill),
             ]
+            .width(Length::Fill)
             .into(),
         };
 
         let surah_row = row![
-            src_inputs,
-            column![
-                text("السورة").size(11).color(p.muted).font(ui),
-                combo_box(&self.surah_combo, "ابحث عن سورة…", cur_surah_label.as_ref(), Message::SurahPicked)
-                    .width(Length::Fixed(185.0))
-            ]
-            .spacing(4),
-            column![
-                text("العدّ").size(11).color(p.muted).font(ui),
-                combo_box(&self.counting_combo, "العدّ", Some(&self.counting), Message::CountingPicked)
-                    .width(Length::Fixed(175.0))
-            ]
-            .spacing(4),
-            container(text(format!("{n_ayahs} آية")).size(12).font(ui))
-                .padding([8, 12])
+            self.btn_primary(
+                ar("تحميل التلاوة", ui).size(13),
+                [8, 16],
+                Some(Message::LoadAudio),
+            ),
+            container(ar(format!("{n_ayahs} آية"), ui).size(12).color(p.muted))
+                .padding([7, 11])
                 .style(move |_| container::Style {
                     background: Some(p.panel2.into()),
                     border: border::Border {
@@ -1347,26 +1670,49 @@ impl App {
                     },
                     ..Default::default()
                 }),
-            button(text("تحميل التلاوة").size(13).font(ui))
-                .padding([9, 16])
-                .on_press(Message::LoadAudio),
+            column![
+                ar("العدّ", ui).size(11).color(p.muted),
+                self.styled_pick(
+                    &COUNTING_OPTS,
+                    Some(CountingOpt(self.counting)),
+                    Message::CountingPicked,
+                    "العدّ",
+                    Length::Fixed(165.0),
+                ),
+            ]
+            .align_x(alignment::Horizontal::Right)
+            .spacing(3),
+            column![
+                ar("السورة", ui).size(11).color(p.muted),
+                self.styled_pick(
+                    &self.surah_opts,
+                    cur_surah,
+                    Message::SurahPicked,
+                    "اختر سورة…",
+                    Length::Fixed(155.0),
+                ),
+            ]
+            .align_x(alignment::Horizontal::Right)
+            .spacing(3),
+            src_inputs,
         ]
-        .spacing(10)
+        .spacing(8)
         .align_y(alignment::Vertical::Bottom);
 
         let source_panel = self.card(
             column![
                 row![
-                    text("١. التلاوة والسورة").size(14).font(ui),
-                    source_tabs,
-                    Space::with_width(Length::Fill),
                     status_txt,
+                    Space::with_width(Length::Fill),
+                    source_tabs,
+                    ar("١. التلاوة والسورة", ui).size(13.5),
                 ]
                 .spacing(10)
                 .align_y(alignment::Vertical::Center),
                 surah_row,
             ]
-            .spacing(10),
+            .spacing(8),
+            10,
         );
 
         // Verse stage
@@ -1405,23 +1751,24 @@ impl App {
             if let Some(txt) = self.surah_text.as_ref().and_then(|s| s.texts.get(nx - 1)) {
                 container(
                     row![
-                        text(format!("التالي (آية {nx}):")).size(13).color(p.accent).font(ui),
-                        text(txt)
-                            .size(22)
+                        Space::with_width(Length::Fill),
+                        text(rtl(txt))
+                            .size(19)
+                            .line_height(1.55)
                             .font(qfont)
                             .shaping(text::Shaping::Advanced),
+                        ar(format!("التالي (آية {nx}):"), ui).size(12.5).color(p.accent),
                     ]
                     .spacing(10)
                     .align_y(alignment::Vertical::Center),
                 )
-                .padding([8, 12])
+                .padding([6, 12])
                 .width(Length::Fill)
                 .style(move |_| container::Style {
                     background: Some(p.soft.into()),
                     border: border::Border {
-                        color: p.line,
-                        width: 0.0,
-                        radius: 10.0.into(),
+                        radius: 9.0.into(),
+                        ..Default::default()
                     },
                     ..Default::default()
                 })
@@ -1430,16 +1777,15 @@ impl App {
                 Space::with_height(0).into()
             }
         } else {
-            container(text("اكتمل تعليم جميع الآيات ✓").size(13).color(p.accent).font(ui))
-                .padding([8, 12])
+            container(ar("اكتمل تعليم جميع الآيات ✓", ui).size(12.5).color(p.accent))
+                .padding([6, 12])
                 .width(Length::Fill)
                 .center_x(Length::Fill)
                 .style(move |_| container::Style {
                     background: Some(p.soft.into()),
                     border: border::Border {
-                        color: p.line,
-                        width: 0.0,
-                        radius: 10.0.into(),
+                        radius: 9.0.into(),
+                        ..Default::default()
                     },
                     ..Default::default()
                 })
@@ -1449,11 +1795,19 @@ impl App {
         let verse_stage = self.card(
             column![
                 row![
+                    ar(riw_meta, ui).size(11.5).color(p.muted),
+                    Space::with_width(Length::Fill),
                     container(
-                        text(if cur == 0 { "الافتتاح".into() } else { format!("الآية {cur}") })
-                            .size(12)
-                            .color(p.accent)
-                            .font(ui)
+                        ar(
+                            if cur == 0 {
+                                "الافتتاح".into()
+                            } else {
+                                format!("الآية {cur}")
+                            },
+                            ui,
+                        )
+                        .size(11.5)
+                        .color(p.accent)
                     )
                     .padding([3, 10])
                     .style(move |_| container::Style {
@@ -1464,31 +1818,31 @@ impl App {
                         },
                         ..Default::default()
                     }),
-                    Space::with_width(Length::Fill),
-                    text(riw_meta).size(12).color(p.muted).font(ui),
                 ]
                 .align_y(alignment::Vertical::Center),
                 container(
-                    text(cur_text)
-                        .size(30)
+                    text(rtl(&cur_text))
+                        .size(26)
+                        .line_height(1.65)
                         .font(qfont)
                         .shaping(text::Shaping::Advanced)
                         .align_x(alignment::Horizontal::Center)
                 )
-                .padding([12, 16])
+                .padding([8, 14])
                 .width(Length::Fill)
                 .center_x(Length::Fill)
                 .style(move |_| container::Style {
                     background: Some(p.panel2.into()),
                     border: border::Border {
-                        radius: 12.0.into(),
+                        radius: 10.0.into(),
                         ..Default::default()
                     },
                     ..Default::default()
                 }),
                 next_banner,
             ]
-            .spacing(10),
+            .spacing(7),
+            10,
         );
 
         // Waveform & transport studio
@@ -1500,6 +1854,7 @@ impl App {
             current_ayah: cur,
             zoom: self.zoom,
             scroll_frac: self.scroll_frac,
+            font: ui,
             colors: WaveColors {
                 bg: p.bg,
                 line: p.line,
@@ -1514,19 +1869,26 @@ impl App {
         .map(Message::Wave);
 
         let zoom_bar = row![
-            text("تكبير").size(12).color(p.muted).font(ui),
-            button(text("−").size(13)).padding([2, 8]).on_press(Message::ZoomStep(-1.0)),
-            slider(1.0..=60.0, self.zoom, Message::ZoomChanged).step(1.0).width(Length::Fixed(140.0)),
-            button(text("+").size(13)).padding([2, 8]).on_press(Message::ZoomStep(1.0)),
-            text(format!("×{}", self.zoom.round() as u32)).size(12),
-            Space::with_width(12),
-            text("تمرير").size(12).color(p.muted).font(ui),
+            checkbox(rtl("متابعة رأس التشغيل"), self.follow)
+                .on_toggle(Message::FollowToggled)
+                .font(ui)
+                .text_shaping(text::Shaping::Advanced)
+                .text_size(12)
+                .size(15),
             slider(0.0..=1.0, self.scroll_frac, Message::ScrollChanged)
                 .step(0.005)
                 .width(Length::Fill),
-            checkbox("متابعة رأس التشغيل", self.follow).on_toggle(Message::FollowToggled).size(16),
+            ar("تمرير", ui).size(11.5).color(p.muted),
+            Space::with_width(8),
+            text(format!("×{}", self.zoom.round() as u32)).size(12),
+            self.btn_ghost(text("+").size(12), [2, 8], Message::ZoomStep(1.0)),
+            slider(1.0..=60.0, self.zoom, Message::ZoomChanged)
+                .step(1.0)
+                .width(Length::Fixed(130.0)),
+            self.btn_ghost(text("−").size(12), [2, 8], Message::ZoomStep(-1.0)),
+            ar("تكبير", ui).size(11.5).color(p.muted),
         ]
-        .spacing(8)
+        .spacing(7)
         .align_y(alignment::Vertical::Center);
 
         let seek_bar = row![
@@ -1547,28 +1909,18 @@ impl App {
             Some(a) => format!("علِّم بداية الآية {a}  [Space]"),
             None => "اكتمل التعليم ✓".into(),
         };
-        let mut mark_btn = button(text(mark_label).size(15).font(ui)).padding([12, 20]).width(Length::Fill);
-        if self.duration_ms > 0 && next.is_some() {
-            mark_btn = mark_btn.on_press(Message::MarkNext);
-        }
+        let mark_msg = if self.duration_ms > 0 && next.is_some() {
+            Some(Message::MarkNext)
+        } else {
+            None
+        };
+        let mark_btn = self
+            .btn_primary(ar(mark_label, ui).size(14), [10, 16], mark_msg)
+            .width(Length::Fill);
 
         let transport = row![
-            mark_btn,
-            button(text("−٥ث").size(13).font(ui))
-                .padding([10, 12])
-                .on_press(Message::Seek(self.now_ms.saturating_sub(5000))),
-            button(
-                text(if self.player.is_playing() { "❚❚ إيقاف" } else { "▶ تشغيل" })
-                    .size(13)
-                    .font(ui)
-            )
-            .padding([10, 14])
-            .on_press(Message::TogglePlay),
-            button(text("+٥ث").size(13).font(ui))
-                .padding([10, 12])
-                .on_press(Message::Seek(self.now_ms + 5000)),
-            container(text(format!("{} / {}", fmt_ms(self.now_ms), fmt_ms(self.duration_ms))).size(13))
-                .padding([8, 10])
+            container(text(format!("{} / {}", fmt_ms(self.now_ms), fmt_ms(self.duration_ms))).size(12.5))
+                .padding([7, 10])
                 .style(move |_| container::Style {
                     background: Some(p.bg.into()),
                     border: border::Border {
@@ -1578,26 +1930,79 @@ impl App {
                     },
                     ..Default::default()
                 }),
+            self.btn_ghost(
+                ar("+٥ث", ui).size(12.5),
+                [8, 12],
+                Message::Seek(self.now_ms + 5000),
+            ),
+            self.btn_ghost(
+                ar(
+                    if self.player.is_playing() {
+                        "إيقاف مؤقت"
+                    } else {
+                        "▶ تشغيل"
+                    },
+                    ui,
+                )
+                .size(12.5),
+                [8, 14],
+                Message::TogglePlay,
+            ),
+            self.btn_ghost(
+                ar("−٥ث", ui).size(12.5),
+                [8, 12],
+                Message::Seek(self.now_ms.saturating_sub(5000)),
+            ),
+            mark_btn,
         ]
-        .spacing(8)
+        .spacing(7)
         .align_y(alignment::Vertical::Center);
 
-        let ai_btn_lbl = if self.ai_running { "⏹ إيقاف AI" } else { "🤖 توقيت AI" };
-        let tools_row = row![
-            button(text(ai_btn_lbl).size(13).font(ui)).padding([7, 12]).on_press(Message::ToggleAiAlign),
-            button(text("✨ اقتراح تلقائي").size(13).font(ui)).padding([7, 12]).on_press(Message::AutoHeuristic),
-            button(text("↶ تراجع").size(13).font(ui)).padding([7, 12]).on_press(Message::Undo),
-            button(text("مسح الكل").size(13).font(ui)).padding([7, 12]).on_press(Message::ResetMarks),
+        let ai_btn = if self.ai_running {
+            self.btn_danger(
+                ar("■ إيقاف AI", ui).size(12.5),
+                [6, 12],
+                Message::ToggleAiAlign,
+            )
+        } else {
+            self.btn_soft(
+                ar("توقيت بالذكاء الاصطناعي", ui).size(12.5),
+                [6, 12],
+                Message::ToggleAiAlign,
+            )
+        };
+
+        let tools_actions = row![
+            self.btn_danger(ar("مسح الكل", ui).size(12.5), [6, 11], Message::ResetMarks),
+            self.btn_ghost(ar("تراجع", ui).size(12.5), [6, 11], Message::Undo),
             Space::with_width(Length::Fill),
-            text("السرعة").size(12).color(p.muted).font(ui),
-            combo_box(&self.rate_combo, "1", Some(&self.rate_str), Message::RatePicked).width(Length::Fixed(72.0)),
-            text("تأخّر(ms)").size(12).color(p.muted).font(ui),
-            text_input("250", &self.reaction_str)
-                .on_input(Message::ReactionChanged)
-                .width(Length::Fixed(64.0)),
-            checkbox("التصاق بالسكتة", self.snap).on_toggle(Message::SnapToggled).size(16),
+            self.btn_soft(ar("اقتراح تلقائي", ui).size(12.5), [6, 12], Message::AutoHeuristic),
+            ai_btn,
         ]
-        .spacing(8)
+        .spacing(7)
+        .align_y(alignment::Vertical::Center);
+
+        let tools_settings = row![
+            checkbox(rtl("التصاق بالسكتة"), self.snap)
+                .on_toggle(Message::SnapToggled)
+                .font(ui)
+                .text_shaping(text::Shaping::Advanced)
+                .text_size(12)
+                .size(15),
+            Space::with_width(Length::Fill),
+            self.styled_input("250", &self.reaction_str, Message::ReactionChanged, 12.5, [5, 8], Length::Fixed(58.0)),
+            ar("تأخّر(ms)", ui).size(11.5).color(p.muted),
+            Space::with_width(8),
+            self.styled_pick(
+                &self.rate_opts,
+                Some(self.rate_str.clone()),
+                Message::RatePicked,
+                "1",
+                Length::Fixed(68.0),
+            ),
+            ar("السرعة", ui).size(11.5).color(p.muted),
+        ]
+        .spacing(7)
         .align_y(alignment::Vertical::Center);
 
         let mut studio_col = column![
@@ -1605,20 +2010,25 @@ impl App {
             self.card(
                 column![
                     row![
-                        text("٢. الاستماع والتعليم").size(14).font(ui),
+                        ar("Space: علِّم · P: تشغيل · ←/→: ٥ث · Z: تراجع", ui)
+                            .size(11)
+                            .color(p.muted),
                         Space::with_width(Length::Fill),
-                        text("Space: علِّم · P: تشغيل · ←/→: ٥ث · Z: تراجع").size(11).color(p.muted).font(ui),
-                    ],
+                        ar("٢. الاستماع والتعليم", ui).size(13.5),
+                    ]
+                    .align_y(alignment::Vertical::Center),
                     wave_el,
                     zoom_bar,
                     seek_bar,
                     transport,
-                    tools_row,
+                    tools_actions,
+                    tools_settings,
                 ]
-                .spacing(10),
+                .spacing(7),
+                10,
             )
         ]
-        .spacing(12)
+        .spacing(10)
         .width(Length::FillPortion(6));
 
         if let Some(ap) = &self.ai_progress {
@@ -1626,15 +2036,18 @@ impl App {
             let bar_card = container(
                 column![
                     row![
-                        text(&ap.text).size(12.5).font(ui),
+                        text(ap.pct.map(|v| format!("{v}%")).unwrap_or_else(|| "…".into()))
+                            .size(12)
+                            .color(p.accent),
                         Space::with_width(Length::Fill),
-                        text(ap.pct.map(|v| format!("{v}%")).unwrap_or_else(|| "…".into())).size(12.5).color(p.accent),
-                    ],
-                    progress_bar(0.0..=100.0, bar_pct).height(6),
+                        ar(&ap.text, ui).size(12),
+                    ]
+                    .align_y(alignment::Vertical::Center),
+                    progress_bar(0.0..=100.0, bar_pct).height(5),
                 ]
-                .spacing(6),
+                .spacing(5),
             )
-            .padding(10)
+            .padding(8)
             .style(move |_| container::Style {
                 background: Some(p.panel2.into()),
                 border: border::Border {
@@ -1647,15 +2060,15 @@ impl App {
             studio_col = studio_col.push(bar_card);
         }
 
-        // Inspector column
+        // Inspector column (on LEFT in RTL layout)
         let insp_tabs = row![
-            self.seg_btn("الآيات", self.inspector_tab == InspectorTab::Table, Message::InspectorChanged(InspectorTab::Table)),
-            self.seg_btn("المصحف", self.inspector_tab == InspectorTab::Mushaf, Message::InspectorChanged(InspectorTab::Mushaf)),
-            self.seg_btn("JSON واستيراد", self.inspector_tab == InspectorTab::Io, Message::InspectorChanged(InspectorTab::Io)),
+            self.btn_ghost(ar("تنزيل JSON", ui).size(12), [5, 10], Message::DownloadJson),
             Space::with_width(Length::Fill),
-            button(text("⬇ JSON").size(12).font(ui)).padding([5, 10]).on_press(Message::DownloadJson),
+            self.seg_btn("JSON واستيراد", self.inspector_tab == InspectorTab::Io, Message::InspectorChanged(InspectorTab::Io)),
+            self.seg_btn("المصحف", self.inspector_tab == InspectorTab::Mushaf, Message::InspectorChanged(InspectorTab::Mushaf)),
+            self.seg_btn("الآيات", self.inspector_tab == InspectorTab::Table, Message::InspectorChanged(InspectorTab::Table)),
         ]
-        .spacing(6)
+        .spacing(5)
         .align_y(alignment::Vertical::Center);
 
         let pages_slice = self.surah_text.as_ref().map(|t| t.pages.as_slice());
@@ -1663,6 +2076,24 @@ impl App {
 
         let insp_body: Element<'_, Message> = match self.inspector_tab {
             InspectorTab::Table => {
+                let header_row = container(
+                    row![
+                        ar("تحكم", ui).size(11).color(p.muted),
+                        Space::with_width(Length::Fill),
+                        ar("المدة", ui).size(11).color(p.muted).width(Length::Fixed(44.0)),
+                        ar("النهاية", ui).size(11).color(p.muted).width(Length::Fixed(58.0)),
+                        ar("البداية (ms)", ui).size(11).color(p.muted).width(Length::Fixed(72.0)),
+                        ar("الآية", ui)
+                            .size(11)
+                            .color(p.muted)
+                            .width(Length::Fixed(46.0))
+                            .align_x(alignment::Horizontal::Right),
+                    ]
+                    .spacing(6)
+                    .align_y(alignment::Vertical::Center),
+                )
+                .padding([3, 8]);
+
                 let mut rows_col = column![].spacing(4);
                 for r in tl {
                     let a = r.ayah;
@@ -1671,11 +2102,8 @@ impl App {
                         text("0").size(12).width(Length::Fixed(72.0)).into()
                     } else {
                         let val = self.table_inputs.get(&a).cloned().unwrap_or_default();
-                        text_input("—", &val)
-                            .on_input(move |s| Message::TableInputChanged(a, s))
+                        self.styled_input("—", &val, move |s| Message::TableInputChanged(a, s), 12.0, [3, 6], Length::Fixed(72.0))
                             .on_submit(Message::TableInputSubmit(a))
-                            .width(Length::Fixed(74.0))
-                            .size(12)
                             .into()
                     };
                     let end_txt = r.end.map(fmt_ms).unwrap_or_else(|| "–".into());
@@ -1684,29 +2112,42 @@ impl App {
                         _ => "–".into(),
                     };
 
-                    let mut acts = row![
-                        button(text("▶").size(11)).padding([3, 6]).on_press(Message::PlayAyah(a)),
-                    ]
-                    .spacing(3);
+                    let mut acts = row![].spacing(3);
                     if a > 0 {
                         acts = acts
-                            .push(button(text("⌖").size(11)).padding([3, 6]).on_press(Message::SetAyahToNow(a)))
-                            .push(button(text("−").size(11)).padding([3, 6]).on_press(Message::NudgeAyah(a, -100)))
-                            .push(button(text("+").size(11)).padding([3, 6]).on_press(Message::NudgeAyah(a, 100)))
-                            .push(button(text("✕").size(11)).padding([3, 6]).on_press(Message::ClearAyah(a)));
+                            .push(self.btn_danger(text("×").size(11), [3, 6], Message::ClearAyah(a)))
+                            .push(self.btn_ghost(text("+").size(11), [3, 6], Message::NudgeAyah(a, 100)))
+                            .push(self.btn_ghost(text("−").size(11), [3, 6], Message::NudgeAyah(a, -100)))
+                            .push(self.btn_soft(ar("الآن", ui).size(10.5), [3, 6], Message::SetAyahToNow(a)));
                     }
+                    acts = acts.push(self.btn_ghost(
+                        text("▶").size(11).shaping(text::Shaping::Advanced),
+                        [3, 6],
+                        Message::PlayAyah(a),
+                    ));
+
+                    let ayah_cell: Element<'_, Message> = if a == 0 {
+                        ar("الافتتاح", ui)
+                            .size(11.5)
+                            .width(Length::Fixed(46.0))
+                            .align_x(alignment::Horizontal::Right)
+                            .into()
+                    } else {
+                        text(a.to_string())
+                            .size(12)
+                            .width(Length::Fixed(46.0))
+                            .align_x(alignment::Horizontal::Right)
+                            .into()
+                    };
 
                     let row_box = container(
                         row![
-                            text(if a == 0 { "الافتتاح".into() } else { a.to_string() })
-                                .size(12)
-                                .width(Length::Fixed(46.0))
-                                .font(ui),
-                            start_el,
-                            text(end_txt).size(12).width(Length::Fixed(62.0)),
-                            text(dur_txt).size(12).width(Length::Fixed(46.0)),
-                            Space::with_width(Length::Fill),
                             acts,
+                            Space::with_width(Length::Fill),
+                            text(dur_txt).size(12).color(p.muted).width(Length::Fixed(44.0)),
+                            text(end_txt).size(12).color(p.muted).width(Length::Fixed(58.0)),
+                            start_el,
+                            ayah_cell,
                         ]
                         .spacing(6)
                         .align_y(alignment::Vertical::Center),
@@ -1715,24 +2156,28 @@ impl App {
                     .style(move |_| container::Style {
                         background: Some(if is_now { p.verse } else { Color::TRANSPARENT }.into()),
                         border: border::Border {
-                            color: p.line,
-                            width: 0.5,
+                            color: if is_now { p.accent } else { p.line },
+                            width: if is_now { 1.0 } else { 0.5 },
                             radius: 6.0.into(),
                         },
                         ..Default::default()
                     });
                     rows_col = rows_col.push(row_box);
                 }
-                scrollable(rows_col).height(Length::Fixed(520.0)).into()
+                column![header_row, scrollable(rows_col).height(Length::Fill)]
+                    .spacing(4)
+                    .height(Length::Fill)
+                    .into()
             }
             InspectorTab::Mushaf => {
-                let mut m_col = column![].spacing(8);
+                let mut m_col = column![].spacing(6);
                 if let Some(st) = &self.surah_text {
                     if self.surah != 9 && !(self.surah == 1 && ed == TextEdition::Hafs) {
                         m_col = m_col.push(
                             container(
-                                text("بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ")
-                                    .size(24)
+                                text(rtl("بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ"))
+                                    .size(22)
+                                    .line_height(1.6)
                                     .font(qfont)
                                     .shaping(text::Shaping::Advanced),
                             )
@@ -1750,10 +2195,13 @@ impl App {
                             format!("{t}\u{00A0}{}", ar_digits(a))
                         };
                         let item = button(
-                            text(line_txt)
-                                .size(24)
+                            text(rtl(&line_txt))
+                                .size(22)
+                                .line_height(1.65)
                                 .font(qfont)
                                 .shaping(text::Shaping::Advanced)
+                                .width(Length::Fill)
+                                .align_x(alignment::Horizontal::Right)
                                 .color(if marked { p.ink } else { p.muted }),
                         )
                         .width(Length::Fill)
@@ -1772,42 +2220,51 @@ impl App {
                         m_col = m_col.push(item);
                     }
                 } else {
-                    m_col = m_col.push(text("جارٍ تحميل نص المصحف…").size(13).color(p.muted).font(ui));
+                    m_col = m_col.push(ar("جارٍ تحميل نص المصحف…", ui).size(13).color(p.muted));
                 }
-                scrollable(m_col).height(Length::Fixed(520.0)).into()
+                scrollable(m_col).height(Length::Fill).into()
             }
             InspectorTab::Io => column![
                 row![
-                    button(text("⬇ تنزيل JSON").size(12).font(ui)).padding([7, 12]).on_press(Message::DownloadJson),
-                    button(text("نسخ").size(12).font(ui)).padding([7, 12]).on_press(Message::CopyJson),
-                    checkbox("حقول mp3quran الكاملة", self.full_fields)
+                    checkbox(rtl("حقول mp3quran الكاملة"), self.full_fields)
                         .on_toggle(Message::FullFieldsToggled)
-                        .size(16),
+                        .font(ui)
+                        .text_shaping(text::Shaping::Advanced)
+                        .text_size(12)
+                        .size(15),
+                    Space::with_width(Length::Fill),
+                    self.btn_ghost(ar("نسخ", ui).size(12), [6, 12], Message::CopyJson),
+                    self.btn_primary(ar("تنزيل JSON", ui).size(12), [6, 12], Some(Message::DownloadJson)),
                 ]
                 .spacing(8)
                 .align_y(alignment::Vertical::Center),
                 text_editor(&self.json_content)
                     .on_action(Message::JsonAction)
-                    .height(Length::Fixed(340.0)),
+                    .height(Length::Fill),
                 row![
-                    button(text("استيراد من النص").size(12).font(ui)).padding([7, 12]).on_press(Message::ImportFromText),
-                    button(text("📂 استيراد ملف JSON").size(12).font(ui)).padding([7, 12]).on_press(Message::ImportFromFile),
-                    button(text("جلب توقيت mp3quran").size(12).font(ui)).padding([7, 12]).on_press(Message::FetchPublishedTiming),
+                    self.btn_soft(ar("جلب توقيت mp3quran", ui).size(12), [6, 10], Message::FetchPublishedTiming),
+                    self.btn_ghost(ar("استيراد ملف", ui).size(12), [6, 10], Message::ImportFromFile),
+                    self.btn_ghost(ar("استيراد من النص", ui).size(12), [6, 10], Message::ImportFromText),
                 ]
-                .spacing(8),
+                .spacing(6),
             ]
-            .spacing(10)
+            .spacing(8)
+            .height(Length::Fill)
             .into(),
         };
 
         let insp_col = self
-            .card(column![insp_tabs, insp_body].spacing(10))
-            .width(Length::FillPortion(4));
+            .card(column![insp_tabs, insp_body].spacing(8).height(Length::Fill), 10)
+            .width(Length::FillPortion(4))
+            .height(Length::Fill);
 
-        let workspace = row![studio_col, insp_col].spacing(14).align_y(alignment::Vertical::Top);
+        let workspace = row![insp_col, studio_col]
+            .spacing(12)
+            .height(Length::Fill)
+            .align_y(alignment::Vertical::Top);
 
-        container(column![header, source_panel, workspace].spacing(12))
-            .padding(16)
+        container(column![header, source_panel, workspace].spacing(10).height(Length::Fill))
+            .padding([10, 14])
             .width(Length::Fill)
             .height(Length::Fill)
             .style(move |_| container::Style {
