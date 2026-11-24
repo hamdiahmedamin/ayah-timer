@@ -8,11 +8,12 @@ use iced::event::{self, Event};
 use iced::keyboard::{self, key::Named, Key};
 use iced::overlay::menu;
 use iced::widget::{
-    button, checkbox, column, container, pick_list, progress_bar, row, scrollable, slider, text,
-    text_editor, text_input, Space,
+    button, checkbox, column, container, mouse_area, pick_list, progress_bar, row, scrollable,
+    slider, stack, text, text_editor, text_input, Space,
 };
 use iced::{
-    alignment, border, Color, Element, Font, Length, Padding, Subscription, Task, Theme,
+    alignment, border, Color, Element, Font, Length, Padding, Shadow, Subscription, Task, Theme,
+    Vector,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,8 +25,8 @@ use align::{auto_heuristic, ensure_ai_model, run_ai_alignment, AiProgress};
 use audio::{analyze_audio_file, AudioAnalysis, AudioPlayer};
 use quran::{
     ar_digits, cache_dir, ensure_fonts, fetch_published_timings, fetch_reciters_and_timed_reads,
-    fetch_surah_text, fmt_ms, http_client, load_cached_fonts_sync, norm_url, Counting,
-    LoadedFonts, Moshaf, Reciter, Riwayah, SurahText, TextEdition, SURAHS,
+    fetch_surah_text, fmt_ms, http_client, load_cached_fonts_sync, norm_url, normalize_search,
+    Counting, LoadedFonts, Moshaf, Reciter, Riwayah, SurahText, TextEdition, SURAHS,
 };
 use timing::{
     build_timeline, current_ayah, export_json, import_json, load_work, next_unmarked, save_work,
@@ -79,40 +80,40 @@ fn ar<'a>(s: impl AsRef<str>, font: Font) -> text::Text<'a> {
         .shaping(text::Shaping::Advanced)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectorKind {
+    Reciter,
+    Moshaf,
+    Surah,
+    Counting,
+}
+
+fn search_input_id() -> text_input::Id {
+    text_input::Id::new("selector_search")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ArOption {
     idx: usize,
-    label: String,
+    raw_label: String,
+    search_key: String,
 }
 
 impl ArOption {
     fn new(idx: usize, raw: &str) -> Self {
         Self {
             idx,
-            label: rtl(raw),
+            raw_label: raw.to_string(),
+            search_key: normalize_search(raw),
         }
     }
 }
 
 impl std::fmt::Display for ArOption {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.label)
+        f.write_str(&rtl(&self.raw_label))
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CountingOpt(Counting);
-
-impl std::fmt::Display for CountingOpt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&rtl(self.0.label()))
-    }
-}
-
-const COUNTING_OPTS: [CountingOpt; 2] = [
-    CountingOpt(Counting::Hafs),
-    CountingOpt(Counting::Madani),
-];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceTab {
@@ -203,10 +204,13 @@ enum Message {
     SurahTextLoaded(usize, TextEdition, Result<SurahText, String>),
     SourceTabChanged(SourceTab),
     RiwayahChanged(Riwayah),
-    ReciterPicked(ArOption),
-    MoshafPicked(ArOption),
-    SurahPicked(ArOption),
-    CountingPicked(CountingOpt),
+    OpenSelector(SelectorKind),
+    CloseSelector,
+    SelectorQueryChanged(String),
+    ClearSelectorQuery,
+    SelectorSubmit,
+    SelectorPick(SelectorKind, usize),
+    Noop,
     PickAudioFile,
     AudioFilePicked(Option<PathBuf>),
     UrlChanged(String),
@@ -271,7 +275,11 @@ struct App {
     reciter_opts: Vec<ArOption>,
     moshaf_opts: Vec<ArOption>,
     surah_opts: Vec<ArOption>,
+    counting_opts: Vec<ArOption>,
     rate_opts: Vec<String>,
+    open_selector: Option<SelectorKind>,
+    selector_query: String,
+    selector_highlight: usize,
 
     surah: usize,
     counting: Counting,
@@ -337,10 +345,17 @@ impl App {
             reciter_opts: vec![ArOption::new(0, "جارٍ التحميل…")],
             moshaf_opts: vec![],
             surah_opts: Self::surah_options(None),
+            counting_opts: vec![
+                ArOption::new(0, Counting::Hafs.label()),
+                ArOption::new(1, Counting::Madani.label()),
+            ],
             rate_opts: ["0.75", "1", "1.25", "1.5", "2"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
+            open_selector: None,
+            selector_query: String::new(),
+            selector_highlight: 0,
             surah: 1,
             counting: Counting::Hafs,
             file_path: None,
@@ -727,39 +742,89 @@ impl App {
                 self.fill_reciters();
                 return self.load_text_task();
             }
-            Message::ReciterPicked(opt) => {
-                if opt.idx < self.reciters.len() {
-                    self.selected_reciter = opt.idx;
-                    return self.fill_moshaf();
+            Message::OpenSelector(kind) => {
+                self.open_selector = Some(kind);
+                self.selector_query.clear();
+                self.selector_highlight = 0;
+                return text_input::focus(search_input_id());
+            }
+            Message::CloseSelector => {
+                self.open_selector = None;
+                self.selector_query.clear();
+                self.selector_highlight = 0;
+            }
+            Message::SelectorQueryChanged(raw) => {
+                let clean: String = raw
+                    .chars()
+                    .filter(|&c| !matches!(c, '\u{200E}' | '\u{2067}' | '\u{2069}'))
+                    .collect();
+                self.selector_highlight = 0;
+                if clean.is_empty() {
+                    self.selector_query.clear();
+                } else if raw.starts_with('\u{200E}') {
+                    self.selector_query = format!("\u{200E}{clean}");
+                } else {
+                    self.selector_query = format!("\u{200E}{clean}");
+                    return text_input::move_cursor_to_end(search_input_id());
                 }
             }
-            Message::MoshafPicked(opt) => {
-                if let Some(r) = self.reciters.get(self.selected_reciter) {
-                    if opt.idx < r.moshaf.len() {
-                        self.selected_moshaf = opt.idx;
-                        return self.picked_moshaf();
+            Message::ClearSelectorQuery => {
+                self.selector_query.clear();
+                self.selector_highlight = 0;
+                return text_input::focus(search_input_id());
+            }
+            Message::SelectorSubmit => {
+                if let Some(kind) = self.open_selector {
+                    let filtered = self.filtered_selector_options(kind);
+                    if let Some(opt) = filtered
+                        .get(self.selector_highlight)
+                        .or_else(|| filtered.first())
+                    {
+                        let idx = opt.idx;
+                        return self.update(Message::SelectorPick(kind, idx));
                     }
                 }
             }
-            Message::SurahPicked(opt) => {
-                let num = opt.idx;
-                if (1..=114).contains(&num) {
-                    if self.source_tab == SourceTab::Mp3Quran && num != self.surah {
-                        self.clear_audio();
-                        self.say("", false);
+            Message::SelectorPick(kind, idx) => {
+                self.open_selector = None;
+                self.selector_query.clear();
+                self.selector_highlight = 0;
+                match kind {
+                    SelectorKind::Reciter => {
+                        if idx < self.reciters.len() {
+                            self.selected_reciter = idx;
+                            return self.fill_moshaf();
+                        }
                     }
-                    self.surah = num;
-                    self.surah_text = None;
-                    self.restore_work();
-                    return self.load_text_task();
+                    SelectorKind::Moshaf => {
+                        if let Some(r) = self.reciters.get(self.selected_reciter) {
+                            if idx < r.moshaf.len() {
+                                self.selected_moshaf = idx;
+                                return self.picked_moshaf();
+                            }
+                        }
+                    }
+                    SelectorKind::Surah => {
+                        if (1..=114).contains(&idx) {
+                            if self.source_tab == SourceTab::Mp3Quran && idx != self.surah {
+                                self.clear_audio();
+                                self.say("", false);
+                            }
+                            self.surah = idx;
+                            self.surah_text = None;
+                            self.restore_work();
+                            return self.load_text_task();
+                        }
+                    }
+                    SelectorKind::Counting => {
+                        self.counting = if idx == 0 { Counting::Hafs } else { Counting::Madani };
+                        self.surah_text = None;
+                        self.restore_work();
+                        return self.load_text_task();
+                    }
                 }
             }
-            Message::CountingPicked(opt) => {
-                self.counting = opt.0;
-                self.surah_text = None;
-                self.restore_work();
-                return self.load_text_task();
-            }
+            Message::Noop => {}
             Message::PickAudioFile => {
                 return Task::perform(
                     async {
@@ -1258,6 +1323,22 @@ impl App {
             Message::PublishedTimingLoaded(Err(e)) => self.say(format!("تعذّر الجلب: {e}"), true),
             Message::ToggleTheme => self.dark = !self.dark,
             Message::KeyPressed(key, mods) => {
+                if let Some(kind) = self.open_selector {
+                    match key.as_ref() {
+                        Key::Named(Named::Escape) => return self.update(Message::CloseSelector),
+                        Key::Named(Named::ArrowDown) => {
+                            let len = self.filtered_selector_options(kind).len();
+                            if self.selector_highlight + 1 < len {
+                                self.selector_highlight += 1;
+                            }
+                        }
+                        Key::Named(Named::ArrowUp) => {
+                            self.selector_highlight = self.selector_highlight.saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                    return Task::none();
+                }
                 if mods.control() || mods.alt() || mods.logo() || self.inspector_tab == InspectorTab::Io {
                     return Task::none();
                 }
@@ -1504,6 +1585,75 @@ impl App {
             })
     }
 
+    fn filtered_selector_options(&self, kind: SelectorKind) -> Vec<&ArOption> {
+        let opts = match kind {
+            SelectorKind::Reciter => &self.reciter_opts,
+            SelectorKind::Moshaf => &self.moshaf_opts,
+            SelectorKind::Surah => &self.surah_opts,
+            SelectorKind::Counting => &self.counting_opts,
+        };
+        let q = normalize_search(&self.selector_query);
+        let tokens: Vec<&str> = q.split_whitespace().collect();
+        if tokens.is_empty() {
+            return opts.iter().collect();
+        }
+        opts.iter()
+            .filter(|o| tokens.iter().all(|t| o.search_key.contains(t)))
+            .collect()
+    }
+
+    fn selector_trigger<'a>(
+        &self,
+        label: &str,
+        kind: SelectorKind,
+        width: Length,
+    ) -> Element<'a, Message> {
+        let p = self.pal();
+        let active = self.open_selector == Some(kind);
+        button(
+            row![
+                text("▾").size(12).color(p.muted).shaping(text::Shaping::Advanced),
+                Space::with_width(Length::Fill),
+                ar(label, self.ui_font).size(12.5),
+            ]
+            .spacing(6)
+            .align_y(alignment::Vertical::Center),
+        )
+        .width(width)
+        .padding([6, 10])
+        .on_press(Message::OpenSelector(kind))
+        .style(move |_, status| button::Style {
+            background: Some(p.panel2.into()),
+            text_color: p.ink,
+            border: border::Border {
+                color: if active || status == button::Status::Hovered {
+                    p.accent
+                } else {
+                    p.line
+                },
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+    }
+
+    fn rtl_checkbox<'a>(
+        &self,
+        label: &'a str,
+        checked: bool,
+        on_toggle: impl Fn(bool) -> Message + 'a,
+    ) -> Element<'a, Message> {
+        row![
+            ar(label, self.ui_font).size(12),
+            checkbox("", checked).on_toggle(on_toggle).size(15),
+        ]
+        .spacing(6)
+        .align_y(alignment::Vertical::Center)
+        .into()
+    }
+
     fn view(&self) -> Element<'_, Message> {
         let p = self.pal();
         let ui = self.ui_font;
@@ -1581,34 +1731,35 @@ impl App {
         ]
         .spacing(4);
 
-        let cur_rec = self.reciter_opts.get(self.selected_reciter).cloned();
-        let cur_moshaf = self.moshaf_opts.get(self.selected_moshaf).cloned();
-        let cur_surah = self.surah_opts.iter().find(|o| o.idx == self.surah).cloned();
+        let cur_rec = self
+            .reciter_opts
+            .get(self.selected_reciter)
+            .map(|o| o.raw_label.as_str())
+            .unwrap_or("اختر القارئ…");
+        let cur_moshaf = self
+            .moshaf_opts
+            .get(self.selected_moshaf)
+            .map(|o| o.raw_label.as_str())
+            .unwrap_or("اختر الرواية…");
+        let cur_surah = self
+            .surah_opts
+            .iter()
+            .find(|o| o.idx == self.surah)
+            .map(|o| o.raw_label.as_str())
+            .unwrap_or("اختر سورة…");
 
         let src_inputs: Element<'_, Message> = match self.source_tab {
             SourceTab::Mp3Quran => row![
                 column![
                     ar("المصحف/الرواية", ui).size(11).color(p.muted),
-                    self.styled_pick(
-                        &self.moshaf_opts,
-                        cur_moshaf,
-                        Message::MoshafPicked,
-                        "اختر الرواية…",
-                        Length::Fill,
-                    ),
+                    self.selector_trigger(cur_moshaf, SelectorKind::Moshaf, Length::Fill),
                 ]
                 .align_x(alignment::Horizontal::Right)
                 .spacing(3)
                 .width(Length::FillPortion(2)),
                 column![
                     ar("القارئ", ui).size(11).color(p.muted),
-                    self.styled_pick(
-                        &self.reciter_opts,
-                        cur_rec,
-                        Message::ReciterPicked,
-                        "اختر القارئ…",
-                        Length::Fill,
-                    ),
+                    self.selector_trigger(cur_rec, SelectorKind::Reciter, Length::Fill),
                 ]
                 .align_x(alignment::Horizontal::Right)
                 .spacing(3)
@@ -1672,25 +1823,13 @@ impl App {
                 }),
             column![
                 ar("العدّ", ui).size(11).color(p.muted),
-                self.styled_pick(
-                    &COUNTING_OPTS,
-                    Some(CountingOpt(self.counting)),
-                    Message::CountingPicked,
-                    "العدّ",
-                    Length::Fixed(165.0),
-                ),
+                self.selector_trigger(self.counting.label(), SelectorKind::Counting, Length::Fixed(165.0)),
             ]
             .align_x(alignment::Horizontal::Right)
             .spacing(3),
             column![
                 ar("السورة", ui).size(11).color(p.muted),
-                self.styled_pick(
-                    &self.surah_opts,
-                    cur_surah,
-                    Message::SurahPicked,
-                    "اختر سورة…",
-                    Length::Fixed(155.0),
-                ),
+                self.selector_trigger(cur_surah, SelectorKind::Surah, Length::Fixed(155.0)),
             ]
             .align_x(alignment::Horizontal::Right)
             .spacing(3),
@@ -1869,12 +2008,7 @@ impl App {
         .map(Message::Wave);
 
         let zoom_bar = row![
-            checkbox(rtl("متابعة رأس التشغيل"), self.follow)
-                .on_toggle(Message::FollowToggled)
-                .font(ui)
-                .text_shaping(text::Shaping::Advanced)
-                .text_size(12)
-                .size(15),
+            self.rtl_checkbox("متابعة رأس التشغيل", self.follow, Message::FollowToggled),
             slider(0.0..=1.0, self.scroll_frac, Message::ScrollChanged)
                 .step(0.005)
                 .width(Length::Fill),
@@ -1915,7 +2049,14 @@ impl App {
             None
         };
         let mark_btn = self
-            .btn_primary(ar(mark_label, ui).size(14), [10, 16], mark_msg)
+            .btn_primary(
+                ar(mark_label, ui)
+                    .size(14)
+                    .width(Length::Fill)
+                    .align_x(alignment::Horizontal::Center),
+                [10, 16],
+                mark_msg,
+            )
             .width(Length::Fill);
 
         let transport = row![
@@ -1983,14 +2124,10 @@ impl App {
         .align_y(alignment::Vertical::Center);
 
         let tools_settings = row![
-            checkbox(rtl("التصاق بالسكتة"), self.snap)
-                .on_toggle(Message::SnapToggled)
-                .font(ui)
-                .text_shaping(text::Shaping::Advanced)
-                .text_size(12)
-                .size(15),
+            self.rtl_checkbox("التصاق بالسكتة", self.snap, Message::SnapToggled),
             Space::with_width(Length::Fill),
-            self.styled_input("250", &self.reaction_str, Message::ReactionChanged, 12.5, [5, 8], Length::Fixed(58.0)),
+            self.styled_input("250", &self.reaction_str, Message::ReactionChanged, 12.5, [5, 8], Length::Fixed(58.0))
+                .align_x(alignment::Horizontal::Center),
             ar("تأخّر(ms)", ui).size(11.5).color(p.muted),
             Space::with_width(8),
             self.styled_pick(
@@ -2080,9 +2217,21 @@ impl App {
                     row![
                         ar("تحكم", ui).size(11).color(p.muted),
                         Space::with_width(Length::Fill),
-                        ar("المدة", ui).size(11).color(p.muted).width(Length::Fixed(44.0)),
-                        ar("النهاية", ui).size(11).color(p.muted).width(Length::Fixed(58.0)),
-                        ar("البداية (ms)", ui).size(11).color(p.muted).width(Length::Fixed(72.0)),
+                        ar("المدة", ui)
+                            .size(11)
+                            .color(p.muted)
+                            .width(Length::Fixed(44.0))
+                            .align_x(alignment::Horizontal::Center),
+                        ar("النهاية", ui)
+                            .size(11)
+                            .color(p.muted)
+                            .width(Length::Fixed(58.0))
+                            .align_x(alignment::Horizontal::Center),
+                        ar("البداية (ms)", ui)
+                            .size(11)
+                            .color(p.muted)
+                            .width(Length::Fixed(72.0))
+                            .align_x(alignment::Horizontal::Center),
                         ar("الآية", ui)
                             .size(11)
                             .color(p.muted)
@@ -2099,10 +2248,15 @@ impl App {
                     let a = r.ayah;
                     let is_now = a == cur;
                     let start_el: Element<'_, Message> = if a == 0 {
-                        text("0").size(12).width(Length::Fixed(72.0)).into()
+                        text("0")
+                            .size(12)
+                            .width(Length::Fixed(72.0))
+                            .align_x(alignment::Horizontal::Center)
+                            .into()
                     } else {
                         let val = self.table_inputs.get(&a).cloned().unwrap_or_default();
                         self.styled_input("—", &val, move |s| Message::TableInputChanged(a, s), 12.0, [3, 6], Length::Fixed(72.0))
+                            .align_x(alignment::Horizontal::Center)
                             .on_submit(Message::TableInputSubmit(a))
                             .into()
                     };
@@ -2144,8 +2298,16 @@ impl App {
                         row![
                             acts,
                             Space::with_width(Length::Fill),
-                            text(dur_txt).size(12).color(p.muted).width(Length::Fixed(44.0)),
-                            text(end_txt).size(12).color(p.muted).width(Length::Fixed(58.0)),
+                            text(dur_txt)
+                                .size(12)
+                                .color(p.muted)
+                                .width(Length::Fixed(44.0))
+                                .align_x(alignment::Horizontal::Center),
+                            text(end_txt)
+                                .size(12)
+                                .color(p.muted)
+                                .width(Length::Fixed(58.0))
+                                .align_x(alignment::Horizontal::Center),
                             start_el,
                             ayah_cell,
                         ]
@@ -2226,12 +2388,7 @@ impl App {
             }
             InspectorTab::Io => column![
                 row![
-                    checkbox(rtl("حقول mp3quran الكاملة"), self.full_fields)
-                        .on_toggle(Message::FullFieldsToggled)
-                        .font(ui)
-                        .text_shaping(text::Shaping::Advanced)
-                        .text_size(12)
-                        .size(15),
+                    self.rtl_checkbox("حقول mp3quran الكاملة", self.full_fields, Message::FullFieldsToggled),
                     Space::with_width(Length::Fill),
                     self.btn_ghost(ar("نسخ", ui).size(12), [6, 12], Message::CopyJson),
                     self.btn_primary(ar("تنزيل JSON", ui).size(12), [6, 12], Some(Message::DownloadJson)),
@@ -2263,7 +2420,7 @@ impl App {
             .height(Length::Fill)
             .align_y(alignment::Vertical::Top);
 
-        container(column![header, source_panel, workspace].spacing(10).height(Length::Fill))
+        let base_ui: Element<'_, Message> = container(column![header, source_panel, workspace].spacing(10).height(Length::Fill))
             .padding([10, 14])
             .width(Length::Fill)
             .height(Length::Fill)
@@ -2272,6 +2429,169 @@ impl App {
                 text_color: Some(p.ink),
                 ..Default::default()
             })
-            .into()
+            .into();
+
+        if let Some(kind) = self.open_selector {
+            let (title, total, current_idx) = match kind {
+                SelectorKind::Reciter => ("اختر القارئ", self.reciter_opts.len(), self.selected_reciter),
+                SelectorKind::Moshaf => ("اختر المصحف / الرواية", self.moshaf_opts.len(), self.selected_moshaf),
+                SelectorKind::Surah => ("اختر السورة", self.surah_opts.len(), self.surah),
+                SelectorKind::Counting => (
+                    "اختر العدّ",
+                    self.counting_opts.len(),
+                    if self.counting == Counting::Hafs { 0 } else { 1 },
+                ),
+            };
+            let filtered = self.filtered_selector_options(kind);
+            let shown = filtered.len();
+
+            let mut list_col = column![].spacing(4);
+            if filtered.is_empty() {
+                list_col = list_col.push(
+                    container(ar("لا توجد نتائج مطابقة", ui).size(13).color(p.muted))
+                        .padding(20)
+                        .width(Length::Fill)
+                        .center_x(Length::Fill),
+                );
+            } else {
+                for (i, opt) in filtered.into_iter().enumerate() {
+                    let is_current = opt.idx == current_idx;
+                    let is_hl = i == self.selector_highlight;
+                    let idx = opt.idx;
+                    let row_btn = button(
+                        row![
+                            text(if is_current { "✓" } else { "" })
+                                .size(13)
+                                .shaping(text::Shaping::Advanced)
+                                .color(if is_hl { p.accent_ink } else { p.accent }),
+                            Space::with_width(Length::Fill),
+                            ar(&opt.raw_label, ui).size(13),
+                        ]
+                        .align_y(alignment::Vertical::Center),
+                    )
+                    .width(Length::Fill)
+                    .padding([8, 12])
+                    .on_press(Message::SelectorPick(kind, idx))
+                    .style(move |_, status| {
+                        let bg = if is_hl {
+                            p.accent
+                        } else if status == button::Status::Hovered || is_current {
+                            p.soft
+                        } else {
+                            p.panel2
+                        };
+                        let fg = if is_hl { p.accent_ink } else { p.ink };
+                        button::Style {
+                            background: Some(bg.into()),
+                            text_color: fg,
+                            border: border::Border {
+                                color: if is_current && !is_hl { p.accent } else { p.line },
+                                width: if is_current && !is_hl { 1.0 } else { 0.5 },
+                                radius: 8.0.into(),
+                            },
+                            ..Default::default()
+                        }
+                    });
+                    list_col = list_col.push(row_btn);
+                }
+            }
+
+            let mut clear_btn = button(ar("مسح", ui).size(12))
+                .padding([7, 10])
+                .style(move |_, status| button::Style {
+                    background: Some(if status == button::Status::Hovered { p.soft } else { p.panel2 }.into()),
+                    text_color: if status == button::Status::Disabled { p.muted } else { p.ink },
+                    border: border::Border {
+                        color: p.line,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                });
+            if !self.selector_query.is_empty() {
+                clear_btn = clear_btn.on_press(Message::ClearSelectorQuery);
+            }
+            let search_row = row![
+                clear_btn,
+                self.styled_input(
+                    &rtl("ابحث بالاسم أو الرقم…"),
+                    &self.selector_query,
+                    Message::SelectorQueryChanged,
+                    13.0,
+                    [8, 12],
+                    Length::Fill,
+                )
+                .align_x(alignment::Horizontal::Right)
+                .id(search_input_id())
+                .on_submit(Message::SelectorSubmit),
+            ]
+            .spacing(6)
+            .align_y(alignment::Vertical::Center);
+
+            let popup_card = container(
+                column![
+                    row![
+                        self.btn_ghost(text("×").size(13), [4, 9], Message::CloseSelector),
+                        container(ar(format!("{shown} من {total}"), ui).size(11.5).color(p.muted))
+                            .padding([4, 10])
+                            .style(move |_| container::Style {
+                                background: Some(p.panel2.into()),
+                                border: border::Border {
+                                    color: p.line,
+                                    width: 1.0,
+                                    radius: 999.0.into(),
+                                },
+                                ..Default::default()
+                            }),
+                        Space::with_width(Length::Fill),
+                        ar(title, ui).size(14.5),
+                    ]
+                    .spacing(8)
+                    .align_y(alignment::Vertical::Center),
+                    search_row,
+                    scrollable(list_col).height(Length::Fixed(330.0)),
+                ]
+                .spacing(10),
+            )
+            .width(Length::Fixed(520.0))
+            .padding(14)
+            .style(move |_| container::Style {
+                background: Some(p.panel.into()),
+                border: border::Border {
+                    color: p.accent,
+                    width: 1.5,
+                    radius: 14.0.into(),
+                },
+                shadow: Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                    offset: Vector::new(0.0, 10.0),
+                    blur_radius: 26.0,
+                },
+                ..Default::default()
+            });
+
+            let backdrop = mouse_area(
+                container(Space::new(Length::Fill, Length::Fill)).style(|_| container::Style {
+                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.28).into()),
+                    ..Default::default()
+                }),
+            )
+            .on_press(Message::CloseSelector);
+
+            let popup_layer = container(mouse_area(popup_card).on_press(Message::Noop))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .padding(Padding {
+                    top: 138.0,
+                    right: 0.0,
+                    bottom: 24.0,
+                    left: 0.0,
+                });
+
+            stack![base_ui, backdrop, popup_layer].into()
+        } else {
+            base_ui
+        }
     }
 }

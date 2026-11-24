@@ -257,6 +257,34 @@ pub fn normalize_for_vocab(text: &str, vocab: &HashMap<String, usize>) -> Vec<us
     out
 }
 
+pub fn normalize_search(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let code = ch as u32;
+        if matches!(ch, '\u{200E}' | '\u{2067}' | '\u{2069}')
+            || (0x0610..=0x061A).contains(&code)
+            || (0x064B..=0x065F).contains(&code)
+            || code == 0x0670
+            || (0x06D6..=0x06ED).contains(&code)
+            || code == 0x0640
+        {
+            continue;
+        }
+        let mapped = match ch {
+            'أ' | 'إ' | 'آ' | 'ٱ' => 'ا',
+            'ة' => 'ه',
+            'ى' | 'ئ' => 'ي',
+            'ؤ' => 'و',
+            '٠'..='٩' => char::from_u32('0' as u32 + (code - '٠' as u32)).unwrap_or(ch),
+            _ => ch,
+        };
+        for lc in mapped.to_lowercase() {
+            out.push(lc);
+        }
+    }
+    out
+}
+
 pub fn http_client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .user_agent("ayah-timer-rust/0.1")
@@ -559,5 +587,13 @@ mod tests {
         vocab.insert("د".into(), 11);
         let toks = normalize_for_vocab("ٱلْحَمْدُ", &vocab);
         assert_eq!(toks, vec![4, 26, 9, 27, 11]);
+    }
+
+    #[test]
+    fn search_normalization_matches_variants() {
+        assert_eq!(normalize_search("إبراهيم"), normalize_search("ابراهيم"));
+        assert_eq!(normalize_search("آل عمران"), normalize_search("ال عمران"));
+        assert_eq!(normalize_search("البقرة"), normalize_search("البقره"));
+        assert_eq!(normalize_search("١٨. الكهف"), "18. الكهف");
     }
 }
