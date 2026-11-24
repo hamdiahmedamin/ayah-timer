@@ -7,8 +7,10 @@ description = "Native Rust desktop app to time Quran surah recitations by ayah w
 [dependencies]
 anyhow = "1"
 arboard = "3"
+deep-filter-rt = "0.2"
 dirs = "6"
-iced = { version = "0.13.1", features = ["canvas", "tokio", "advanced", "svg"] }
+iced = { version = "0.13.1", features = ["canvas", "tokio", "advanced", "svg", "image"] }
+ndarray = "0.17"
 ort = { version = "2.0.0-rc.10", features = ["download-binaries", "copy-dylibs"] }
 reqwest = { version = "0.13", features = ["json", "stream", "gzip"] }
 rfd = "0.16"

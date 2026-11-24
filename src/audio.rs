@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use rodio::{Decoder, OutputStream, Sink};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -11,9 +11,124 @@ use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::errors::Error as SymphErr;
 use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+
+/// File view that starts after a leading ID3v2 tag.
+/// ponytail: symphonia 0.5 aborts the whole probe on a malformed ID3v2 frame
+/// ("id3v2: invalid text encoding") and we never use tags, so we just skip them.
+struct SkipId3 {
+    f: File,
+    off: u64,
+    len: u64,
+}
+
+impl SkipId3 {
+    fn open(path: &Path) -> io::Result<Self> {
+        let mut f = File::open(path)?;
+        let total = f.metadata()?.len();
+        let mut h = [0u8; 10];
+        let off = if f.read_exact(&mut h).is_ok()
+            && &h[..3] == b"ID3"
+            && h[6..10].iter().all(|b| b & 0x80 == 0)
+        {
+            let size = h[6..10].iter().fold(0u64, |a, &b| (a << 7) | b as u64);
+            let footer = if h[5] & 0x10 != 0 { 10 } else { 0 };
+            (10 + size + footer).min(total)
+        } else {
+            0
+        };
+        f.seek(SeekFrom::Start(off))?;
+        Ok(Self { f, off, len: total - off })
+    }
+}
+
+impl Read for SkipId3 {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.f.read(buf)
+    }
+}
+
+impl Seek for SkipId3 {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let target = match pos {
+            SeekFrom::Start(n) => Some(n),
+            SeekFrom::End(n) => self.len.checked_add_signed(n),
+            SeekFrom::Current(n) => (self.f.stream_position()? - self.off).checked_add_signed(n),
+        }
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?;
+        self.f.seek(SeekFrom::Start(self.off + target))?;
+        Ok(target)
+    }
+}
+
+impl MediaSource for SkipId3 {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+    fn byte_len(&self) -> Option<u64> {
+        Some(self.len)
+    }
+}
+
+const AUDIO_EXTS: [&str; 7] = ["mp3", "wav", "m4a", "flac", "ogg", "opus", "aac"];
+
+/// Surah number from a file name: the first run of digits in the stem, if 1..=114
+/// ("001.mp3", "Surah_002", "114-An-Nas.mp3").
+pub fn surah_from_name(stem: &str) -> Option<usize> {
+    let digits: String = stem
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok().filter(|n| (1..=114).contains(n))
+}
+
+/// Map surah number → audio file for every audio file directly inside `dir`.
+/// On duplicates the alphabetically first file wins.
+pub fn scan_surah_folder(dir: &Path) -> std::collections::BTreeMap<usize, PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| AUDIO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        })
+        .collect();
+    files.sort();
+    let mut map = std::collections::BTreeMap::new();
+    for f in files {
+        if let Some(n) = f.file_stem().and_then(|s| s.to_str()).and_then(surah_from_name) {
+            map.entry(n).or_insert(f);
+        }
+    }
+    map
+}
+
+/// Play a file once on its own output stream (denoise previews), independent of
+/// the main player. Set the returned flag to stop it early.
+pub fn play_once(path: PathBuf) -> Arc<AtomicBool> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    std::thread::spawn(move || {
+        let Ok((_stream, handle)) = OutputStream::try_default() else { return };
+        let Ok(file) = SkipId3::open(&path) else { return };
+        let Ok(dec) = Decoder::new(BufReader::new(file)) else { return };
+        let Ok(sink) = Sink::try_new(&handle) else { return };
+        sink.append(dec);
+        while !sink.empty() && !flag.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        sink.stop();
+        flag.store(true, Ordering::Relaxed);
+    });
+    stop
+}
 
 #[derive(Debug, Clone)]
 pub struct AudioAnalysis {
@@ -63,7 +178,7 @@ impl AudioPlayer {
 
             let open_sink = |path: &Path, rate: f32| -> Option<Sink> {
                 let (_, handle) = stream.as_ref()?;
-                let file = File::open(path).ok()?;
+                let file = SkipId3::open(path).ok()?;
                 let dec = Decoder::new(BufReader::new(file)).ok()?;
                 let s = Sink::try_new(handle).ok()?;
                 s.set_speed(rate);
@@ -252,7 +367,7 @@ impl AudioPlayer {
 }
 
 fn open_symphonia(path: &Path) -> Result<(Box<dyn symphonia::core::formats::FormatReader>, Box<dyn symphonia::core::codecs::Decoder>, u32, u32, usize, u64)> {
-    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let file = SkipId3::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
@@ -509,4 +624,30 @@ pub fn stream_pcm_16k(
     }
 
     Ok((processed_samples * 1000) / 16000)
+}
+
+#[test]
+fn skip_id3_view() {
+    let p = std::env::temp_dir().join("ayah_skip_id3_test.bin");
+    // ID3v2 header with syncsafe size 5, then 5 tag bytes, then payload "MP3!"
+    std::fs::write(&p, [b"ID3\x03\x00\x00\x00\x00\x00\x05".as_slice(), b"xxxxx", b"MP3!"].concat()).unwrap();
+    let mut v = SkipId3::open(&p).unwrap();
+    assert_eq!(v.byte_len(), Some(4));
+    let mut s = String::new();
+    v.read_to_string(&mut s).unwrap();
+    assert_eq!(s, "MP3!");
+    assert_eq!(v.seek(SeekFrom::End(-1)).unwrap(), 3);
+    assert!(v.seek(SeekFrom::Current(-10)).is_err());
+    std::fs::remove_file(&p).ok();
+}
+
+
+#[test]
+fn surah_numbers_from_names() {
+    assert_eq!(surah_from_name("001"), Some(1));
+    assert_eq!(surah_from_name("Surah_002 Al-Baqara"), Some(2));
+    assert_eq!(surah_from_name("114-An-Nas"), Some(114));
+    assert_eq!(surah_from_name("115"), None);
+    assert_eq!(surah_from_name("000"), None);
+    assert_eq!(surah_from_name("cover"), None);
 }

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Ayah Timer
+GenericName=Quran Ayah Timing Tool
+Comment=Time Quran recitations by ayah with AI forced alignment
+Exec=ayah-timer
+Icon=ayah-timer
+Terminal=false
+Categories=AudioVideo;Audio;Education;
+StartupWMClass=ayah-timer

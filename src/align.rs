@@ -409,13 +409,58 @@ async fn download_with_progress(
     Ok(())
 }
 
+/// Precision variants of the same wav2vec2 model (same vocab, interchangeable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum AiModel {
+    /// q4f16, 66 MB
+    Fast,
+    /// q4, 90 MB
+    #[default]
+    Balanced,
+    /// fp32, 378 MB
+    Accurate,
+}
+
+impl AiModel {
+    pub const ALL: [AiModel; 3] = [AiModel::Fast, AiModel::Balanced, AiModel::Accurate];
+
+    pub fn file(self) -> &'static str {
+        match self {
+            AiModel::Fast => "model_q4f16.onnx",
+            AiModel::Balanced => "model_q4.onnx",
+            AiModel::Accurate => "model.onnx",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AiModel::Fast => "سريع",
+            AiModel::Balanced => "متوازن",
+            AiModel::Accurate => "دقيق",
+        }
+    }
+
+    pub fn size_label(self) -> &'static str {
+        match self {
+            AiModel::Fast => "66 MB",
+            AiModel::Balanced => "90 MB",
+            AiModel::Accurate => "378 MB",
+        }
+    }
+
+    pub fn is_downloaded(self) -> bool {
+        cache_dir().join(self.file()).exists()
+    }
+}
+
 pub async fn ensure_ai_model(
+    model: AiModel,
     cancel: &AtomicBool,
     on_progress: &impl Fn(AiProgress),
 ) -> Result<(std::path::PathBuf, HashMap<String, usize>)> {
     let dir = cache_dir();
     let vocab_path = dir.join("vocab.json");
-    let model_path = dir.join("model_q4.onnx");
+    let model_path = dir.join(model.file());
 
     download_with_progress(
         &format!("{MODEL_BASE}/vocab.json"),
@@ -426,10 +471,11 @@ pub async fn ensure_ai_model(
     )
     .await?;
 
+    let what = format!("نموذج الذكاء الاصطناعي {} ({})", model.label(), model.size_label());
     download_with_progress(
-        &format!("{MODEL_BASE}/onnx/model_q4.onnx"),
+        &format!("{MODEL_BASE}/onnx/{}", model.file()),
         &model_path,
-        "نموذج الذكاء الاصطناعي (86 MB)",
+        &what,
         cancel,
         on_progress,
     )
@@ -783,10 +829,26 @@ mod tests {
 
     #[tokio::test]
     async fn real_audio_hafs_surah1_ai_alignment() {
+        check_model(AiModel::Balanced, "ayah_timer_test_001.mp3").await;
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads the 66 MB model"]
+    async fn fast_ai_model_aligns() {
+        check_model(AiModel::Fast, "ayah_timer_test_001_fast.mp3").await;
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads the 378 MB model"]
+    async fn accurate_ai_model_aligns() {
+        check_model(AiModel::Accurate, "ayah_timer_test_001_acc.mp3").await;
+    }
+
+    async fn check_model(model: AiModel, tmp_name: &str) {
         let cancel = AtomicBool::new(false);
-        let (model_path, vocab) = ensure_ai_model(&cancel, &|_| {}).await.unwrap();
+        let (model_path, vocab) = ensure_ai_model(model, &cancel, &|_| {}).await.unwrap();
         let st = fetch_surah_text(1, TextEdition::Hafs).await.unwrap();
-        let tmp = std::env::temp_dir().join("ayah_timer_test_001.mp3");
+        let tmp = std::env::temp_dir().join(tmp_name);
         if !tmp.exists() {
             let bytes = http_client()
                 .unwrap()
@@ -830,6 +892,7 @@ mod tests {
         for w in starts.windows(2) {
             assert!(w[1] > w[0], "non-monotonic: {starts:?}");
         }
-        assert!(starts[0] > 5000 && starts[0] < 8000, "unexpected v1 start: {}", starts[0]);
+        println!("{model:?}: {starts:?}");
+        assert!(starts[0] > 5000 && starts[0] < 8000, "{model:?}: unexpected v1 start: {}", starts[0]);
     }
 }
