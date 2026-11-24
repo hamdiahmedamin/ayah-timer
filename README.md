@@ -42,9 +42,13 @@ with a median error of 0.46 s. Always review the draft by ear.
 
 ## Built with
 
-One `index.html`, no build step, three custom elements: `<ayah-timer>` (the app),
-`<wave-view>` (waveform, marks, seeking) and `<ayah-table>` (the verse list).
-Audio is decoded in the browser with the Web Audio API; nothing is uploaded.
+One `index.html`, no build step, custom elements (`<ayah-timer>`, `<wave-view>`,
+`<ayah-table>`, `<verse-stage>`, `<progress-meter>`, `<mushaf-view>`, `<smart-select>`,
+`<file-drop>`). Audio is decoded in the browser with the Web Audio API (with chunked
+16 kHz decoding for multi-hour MP3s); nothing is uploaded.
+
+In-browser AI alignment (`🤖 توقيت AI`) runs `wav2vec2-base-arabic` (`model_q4.onnx`,
+~86 MB, cached in browser Cache Storage) via `onnxruntime-web` inside a Web Worker.
 
 Data: recitations and timings from mp3quran.net's public API; the Hafs text shown while
 listening from alquran.cloud.

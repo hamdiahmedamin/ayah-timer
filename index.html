@@ -1114,7 +1114,8 @@ class AyahTimer extends HTMLElement {
     } catch {}
     this.audio = new Audio(); this.audio.preload = 'auto';
     this.energy = null;
-    this.stopAt = null; this.audioBlobUrl = null; this.loadSeq = 0;
+    this.stopAt = null; this.audioBlobUrl = null; this.audioBlob = null; this.loadSeq = 0;
+    this.aiRunning = false; this.aiAbort = null; this.aiSess = null; this.aiVocab = null;
     this.mushafCache = {}; this.mushafPromise = {};
     this.build();
     this.audio.addEventListener('timeupdate', () => this.tick());
@@ -1213,6 +1214,7 @@ class AyahTimer extends HTMLElement {
               </div>
               <div class="dock-sub">
                 <div class="dock-tools">
+                  <button id="aiAuto" title="توقيت تلقائي بالذكاء الاصطناعي داخل المتصفح (Wav2Vec2 Arabic ONNX — يعمل مع حفص وورش وقالون والملفات الطويلة)">🤖 توقيت AI</button>
                   <button id="auto" title="يملأ الآيات غير المعلَّمة من سكتات التلاوة وطول الآيات، ويُبقي ما علَّمته">✨ اقتراح تلقائي</button>
                   <button id="undo" title="Z">↶ تراجع</button>
                   <button class="danger-ghost" id="reset">مسح الكل</button>
@@ -1317,6 +1319,7 @@ class AyahTimer extends HTMLElement {
     bar.addEventListener('pointercancel', stopSeek);
     $('reaction').addEventListener('change', (e) => { this.state.reaction = Math.max(0, +e.target.value || 0); });
     $('snap').addEventListener('change', (e) => { this.state.snap = e.target.checked; });
+    $('aiAuto').addEventListener('click', () => (this.aiRunning ? this.cancelAi() : this.aiAlign()));
     $('auto').addEventListener('click', () => this.auto());
     $('undo').addEventListener('click', () => this.undo());
     $('reset').addEventListener('click', () => { if (confirmReset()) { this.state.starts = [0]; this.changed(); } });
@@ -1350,9 +1353,11 @@ class AyahTimer extends HTMLElement {
   /* ---- sources ---- */
   clearAudio() {
     this.loadSeq++;
+    this.cancelAi();
     this.stopAt = null;
     this.audio.pause();
     if (this.audioBlobUrl) { URL.revokeObjectURL(this.audioBlobUrl); this.audioBlobUrl = null; }
+    this.audioBlob = null;
     this.audio.removeAttribute('src');
     this.audio.load();
     this.peaks = null; this.energy = null;
@@ -1451,8 +1456,58 @@ class AyahTimer extends HTMLElement {
     if (this.state.source === 'url') return this.$('url').value.trim() || null;
     return null;
   }
+  async isMp3Blob(blob, label = '') {
+    if (/mpeg|mp3/i.test(blob.type || '') || /\.mp3(\?|$)/i.test(label)) return true;
+    const h = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+    if (h[0] === 0x49 && h[1] === 0x44 && h[2] === 0x33) return true; // ID3
+    return h[0] === 0xFF && (h[1] & 0xE0) === 0xE0;
+  }
+  async decodeChunkedMp3(blob, onChunk, signal) {
+    const head = new Uint8Array(await blob.slice(0, 10).arrayBuffer());
+    let pos = 0;
+    if (head.length >= 10 && head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) {
+      pos = 10 + (((head[6] & 0x7f) << 21) | ((head[7] & 0x7f) << 14) | ((head[8] & 0x7f) << 7) | (head[9] & 0x7f));
+    }
+    const SLICE = 2 * 1024 * 1024;
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    let sampleOffset = 0;
+    try {
+      while (pos < blob.size) {
+        if (signal?.aborted) throw new Error('aborted');
+        let end = Math.min(blob.size, pos + SLICE);
+        if (end < blob.size) {
+          const w0 = Math.max(pos + 4096, end - 8192), w1 = Math.min(blob.size, end + 8192);
+          const win = new Uint8Array(await blob.slice(w0, w1).arrayBuffer());
+          const mid = end - w0;
+          let found = -1;
+          for (let d = 0; d < win.length - 4; d++) {
+            for (const idx of [mid + d, mid - d]) {
+              if (idx < 0 || idx + 3 >= win.length) continue;
+              if (win[idx] === 0xFF && (win[idx + 1] & 0xE0) === 0xE0 && (win[idx + 1] & 0x06) !== 0
+                && (win[idx + 2] & 0xF0) !== 0xF0 && (win[idx + 2] & 0x0C) !== 0x0C) {
+                found = w0 + idx; break;
+              }
+            }
+            if (found >= 0) break;
+          }
+          if (found > pos + 4096) end = found;
+        }
+        const ab = await blob.slice(pos, end).arrayBuffer();
+        if (signal?.aborted) throw new Error('aborted');
+        const buf = await ctx.decodeAudioData(ab);
+        const pcm = buf.getChannelData(0);
+        await onChunk(pcm, sampleOffset, end);
+        sampleOffset += pcm.length;
+        pos = end;
+      }
+    } finally {
+      ctx.close().catch(() => {});
+    }
+    return sampleOffset;
+  }
   async load() {
     const seq = ++this.loadSeq;
+    this.cancelAi();
     this.stopAt = null;
     this.audio.pause();
     let blob, label, ctx = null;
@@ -1470,24 +1525,59 @@ class AyahTimer extends HTMLElement {
         if (seq !== this.loadSeq) return;
         label = url;
       }
-      this.say('جارٍ تحليل الصوت…');
-      const ab = await blob.arrayBuffer();
-      if (seq !== this.loadSeq) return;
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const buf = await ctx.decodeAudioData(ab);
-      if (seq !== this.loadSeq) return;
       if (this.audioBlobUrl) URL.revokeObjectURL(this.audioBlobUrl);
+      this.audioBlob = blob;
       this.audioBlobUrl = URL.createObjectURL(blob);
       this.state.label = label;
       this.audio.src = this.audioBlobUrl;
       this.audio.playbackRate = +this.$('rate').value;
-      this.analyse(buf);
-      this.state.duration = Math.round(buf.duration * 1000);
+      this.say('جارٍ تحليل الصوت…');
+
+      if (blob.size > 35 * 1024 * 1024 && await this.isMp3Blob(blob, label)) {
+        const P = 6000, rawPeaks = new Float32Array(P), energyChunks = [];
+        const totalSamplesEst = Math.max(1, Math.round((this.state.duration || (blob.size / 16000) * 1000) * 16));
+        const win = 160; // 10 ms at 16 kHz
+        let durMs = this.state.duration;
+        const totalSamples = await this.decodeChunkedMp3(blob, (pcm, off, bytesDone) => {
+          if (seq !== this.loadSeq) throw new Error('aborted');
+          const est = Math.max(totalSamplesEst, off + pcm.length);
+          const step = Math.max(1, Math.floor(est / P));
+          for (let j = 0; j < pcm.length; j += 4) {
+            const pIdx = Math.min(P - 1, Math.floor((off + j) / step));
+            const v = Math.abs(pcm[j]);
+            if (v > rawPeaks[pIdx]) rawPeaks[pIdx] = v;
+          }
+          const eLen = Math.floor(pcm.length / win), eArr = new Float32Array(eLen);
+          for (let i = 0; i < eLen; i++) {
+            let s = 0; for (let j = i * win; j < (i + 1) * win; j += 2) s += pcm[j] * pcm[j];
+            eArr[i] = Math.sqrt(s / (win / 2));
+          }
+          energyChunks.push(eArr);
+          this.say(`جارٍ تحليل الصوت… ${Math.round((bytesDone * 100) / blob.size)}%`);
+        });
+        if (seq !== this.loadSeq) return;
+        const top = Math.max(...rawPeaks) || 1;
+        this.peaks = rawPeaks.map((p) => p / top);
+        const totalE = energyChunks.reduce((a, b) => a + b.length, 0);
+        const E = new Float32Array(totalE);
+        let eOff = 0; for (const c of energyChunks) { E.set(c, eOff); eOff += c.length; }
+        this.energy = E;
+        durMs = Math.round((totalSamples / 16000) * 1000);
+        this.state.duration = durMs;
+      } else {
+        const ab = await blob.arrayBuffer();
+        if (seq !== this.loadSeq) return;
+        ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        const buf = await ctx.decodeAudioData(ab);
+        if (seq !== this.loadSeq) return;
+        this.analyse(buf);
+        this.state.duration = Math.round(buf.duration * 1000);
+      }
       this.wave.data = { peaks: this.peaks, duration: this.state.duration };
       this.restore();
       this.say(`جاهز · ${fmt(this.state.duration)}`);
     } catch (err) {
-      if (seq !== this.loadSeq) return;
+      if (seq !== this.loadSeq || err.message === 'aborted') return;
       if (this.state.source === 'url' && err instanceof TypeError) {
         this.say('تعذّر تنزيل الرابط (قد يمنع الخادم الوصول CORS؛ جرّب تنزيل الملف وفتحه من جهازك).', true);
       } else {
@@ -1845,6 +1935,331 @@ class AyahTimer extends HTMLElement {
     this.state.starts = [0, ...best];
     this.changed();
     this.say('اقتراح أولي: راجِع العلامات واسحبها إن لزم.');
+  }
+  /* ---- In-browser AI forced alignment (ONNX Wav2Vec2 Arabic CTC) ---- */
+  cancelAi() {
+    if (this.aiAbort) { this.aiAbort.abort(); this.aiAbort = null; }
+    this.aiRunning = false;
+    const btn = this.$('aiAuto');
+    if (btn) btn.textContent = '🤖 توقيت AI';
+  }
+  loadOrt() {
+    if (window.ort) return Promise.resolve();
+    if (this._ortPromise) return this._ortPromise;
+    this._ortPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.min.js';
+      s.onload = () => {
+        window.ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
+        window.ort.env.wasm.numThreads = 1;
+        resolve();
+      };
+      s.onerror = () => { this._ortPromise = null; reject(new Error('تعذّر تحميل مكتبة ONNX')); };
+      document.head.appendChild(s);
+    });
+    return this._ortPromise;
+  }
+  quantizeLogSoftmax(arr, T, V, dropLeft) {
+    const keep = Math.max(0, T - dropLeft);
+    const out = new Uint8Array(keep * V);
+    for (let t = 0; t < keep; t++) {
+      const src = (t + dropLeft) * V, dst = t * V;
+      let mx = -Infinity;
+      for (let v = 0; v < V; v++) if (arr[src + v] > mx) mx = arr[src + v];
+      let sum = 0;
+      for (let v = 0; v < V; v++) sum += Math.exp(arr[src + v] - mx);
+      const lse = mx + Math.log(sum);
+      for (let v = 0; v < V; v++) {
+        const q = Math.round((lse - arr[src + v]) * 10);
+        out[dst + v] = q < 0 ? 0 : q > 255 ? 255 : q;
+      }
+    }
+    return { q: out, frames: keep, V };
+  }
+  alignCtc(em, nFrames, V, ayahTokens, blankId, beam = 2500) {
+    const states = [-1, blankId], firstState = [];
+    for (const toks of ayahTokens) {
+      if (!toks.length) { firstState.push(states.length - 1); continue; }
+      firstState.push(states.length);
+      for (const tk of toks) { states.push(tk); states.push(blankId); }
+    }
+    states.push(-2);
+    const S = states.length;
+    const stArr = new Int32Array(states);
+    const canSkip = new Uint8Array(S);
+    for (let s = 2; s < S; s++) {
+      if (s === S - 1 || (stArr[s] !== blankId && stArr[s] !== stArr[s - 2])) canSkip[s] = 1;
+    }
+    const beams = [Math.min(S, beam), Math.min(S, Math.max(beam * 3, 8000)), S];
+    for (const W of beams) {
+      const rowBytes = (W + 3) >> 2;
+      const bp = new Uint8Array(nFrames * rowBytes);
+      const loArr = new Int32Array(nFrames);
+      let dp = new Float32Array(S).fill(-1e30);
+      let nextDp = new Float32Array(S).fill(-1e30);
+      dp[0] = 0; dp[1] = 0; if (S > 2) dp[2] = 0;
+      let lo = 0, hi = W;
+      for (let t = 0; t < nFrames; t++) {
+        const eBase = t * V;
+        let minQ = 255;
+        for (let v = 0; v < V; v++) if (em[eBase + v] < minQ) minQ = em[eBase + v];
+        const starVal = -minQ * 0.1 - 0.18;
+        loArr[t] = lo;
+        const bpOff = t * rowBytes;
+        let bestScore = -1e30, bestS = lo;
+        for (let s = lo; s < hi; s++) {
+          const st = stArr[s];
+          const emit = st < 0 ? starVal : -em[eBase + st] * 0.1;
+          let best = dp[s], step = 0;
+          if (s >= 1 && dp[s - 1] > best) { best = dp[s - 1]; step = 1; }
+          if (s >= 2 && canSkip[s] && dp[s - 2] > best) { best = dp[s - 2]; step = 2; }
+          const val = best + emit;
+          nextDp[s] = val;
+          if (val > bestScore) { bestScore = val; bestS = s; }
+          const k = s - lo;
+          bp[bpOff + (k >> 2)] |= (step << ((k & 3) * 2));
+        }
+        dp.fill(-1e30, lo, hi);
+        const tmp = dp; dp = nextDp; nextDp = tmp;
+        if (W < S) {
+          lo = Math.max(0, Math.min(S - W, bestS - (W >> 2)));
+          hi = lo + W;
+        }
+      }
+      const endS = (S >= 2 && dp[S - 2] > dp[S - 1]) ? S - 2 : S - 1;
+      if (dp[endS] > -1e20 || W === S) {
+        const firstFrame = new Int32Array(S).fill(-1);
+        let s = endS;
+        for (let t = nFrames - 1; t >= 0; t--) {
+          firstFrame[s] = t;
+          const k = s - loArr[t];
+          if (k >= 0 && k < W) {
+            const step = (bp[t * rowBytes + (k >> 2)] >> ((k & 3) * 2)) & 3;
+            s = Math.max(0, s - step);
+          }
+        }
+        return firstState.map((st) => Math.max(0, firstFrame[st]) * 20);
+      }
+    }
+    return null;
+  }
+  async fetchCached(url, label, signal) {
+    let cache = null;
+    try { cache = await caches.open('ayah-timer-ai-v1'); } catch {}
+    if (cache) {
+      const hit = await cache.match(url);
+      if (hit) return hit;
+    }
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`${label}: HTTP ${res.status}`);
+    if (!res.body) {
+      if (cache) await cache.put(url, res.clone());
+      return res;
+    }
+    const total = +(res.headers.get('content-length') || 0);
+    const reader = res.body.getReader();
+    const parts = [];
+    let got = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      got += value.byteLength;
+      if (total > 0) {
+        const pct = Math.min(100, Math.round((got * 100) / total));
+        this.say(`جارٍ تنزيل ${label}… ${(got / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB (${pct}%)`);
+      }
+    }
+    const blob = new Blob(parts, { type: res.headers.get('content-type') || 'application/octet-stream' });
+    const cachedRes = new Response(blob, { status: 200, headers: { 'Content-Type': blob.type } });
+    if (cache) await cache.put(url, cachedRes.clone()).catch(() => {});
+    return cachedRes;
+  }
+  async ensureAiModel(signal) {
+    if (this.aiVocab && this.aiSess) return;
+    this.say('جارٍ تحميل محرّك الذكاء الاصطناعي…');
+    await this.loadOrt();
+    const base = 'https://huggingface.co/onnx-community/wav2vec2-base-arabic-without-reused-en-token-ids-v1-ONNX/resolve/main';
+    const vRes = await this.fetchCached(`${base}/vocab.json`, 'قاموس الأحرف', signal);
+    this.aiVocab = await vRes.json();
+    const mRes = await this.fetchCached(`${base}/onnx/model_q4.onnx`, 'نموذج الذكاء الاصطناعي (86 MB)', signal);
+    const modelBuf = await mRes.arrayBuffer();
+    if (signal?.aborted) throw new Error('aborted');
+    this.say('جارٍ تهيئة النموذج…');
+    await new Promise((r) => setTimeout(r, 20));
+    this.aiSess = await window.ort.InferenceSession.create(new Uint8Array(modelBuf), { executionProviders: ['wasm'] });
+  }
+  normalizeForVocab(text, vocab) {
+    const s = String(text || '')
+      .replace(/[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u0640]/g, '')
+      .replace(/[ٱأإآ]/g, 'ا')
+      .replace(/[ىے]/g, 'ي')
+      .replace(/ة/g, 'ه');
+    const toks = [], sp = vocab['|'] ?? 0;
+    let prevSp = true;
+    for (const ch of s) {
+      if (/\s/.test(ch)) {
+        if (!prevSp && toks.length) { toks.push(sp); prevSp = true; }
+      } else if (vocab[ch] != null) {
+        toks.push(vocab[ch]); prevSp = false;
+      }
+    }
+    while (toks.length && toks[toks.length - 1] === sp) toks.pop();
+    return toks;
+  }
+  refineOnset(starts, totalMs) {
+    const E = this.energy;
+    if (!E || E.length < 50) return starts;
+    const sorted = Float32Array.from(E).sort();
+    const floor = sorted[Math.floor(sorted.length * 0.15)];
+    const voice = sorted[Math.floor(sorted.length * 0.70)];
+    const quiet = floor + (voice - floor) * 0.20;
+    const out = [...starts];
+    for (let i = 0; i < out.length; i++) {
+      const lo = i === 0 ? 0 : out[i - 1] + 50;
+      const hi = i === out.length - 1 ? totalMs - 50 : out[i + 1] - 50;
+      const at = Math.round(out[i] / 10);
+      const a0 = Math.max(0, at - 25), a1 = Math.min(E.length - 1, at + 25);
+      if (a1 <= a0) continue;
+      let best = a0, low = E[a0];
+      for (let k = a0 + 1; k <= a1; k++) if (E[k] < low) { low = E[k]; best = k; }
+      if (low < quiet) {
+        let j = best;
+        const back = low * 3 + 0.005;
+        while (j < E.length - 1 && j < best + 40 && E[j] < back) j++;
+        const cand = Math.max(0, j * 10 - 40);
+        if (cand >= lo && cand <= hi) out[i] = cand;
+      }
+    }
+    return out;
+  }
+  async aiAlign() {
+    if (!this.audioBlob) return this.say('حمّل التلاوة أولًا.', true);
+    const n = this.count();
+    if (!this.state.texts || this.state.texts.length !== n) {
+      this.say('جارٍ تحميل نص السورة…');
+      await this.loadText();
+    }
+    if (!this.state.texts || this.state.texts.length !== n) {
+      return this.say('تعذّر تحميل نص السورة.', true);
+    }
+    let allMarked = true;
+    for (let a = 1; a <= n; a++) if (this.state.starts[a] == null) { allMarked = false; break; }
+    if (allMarked) {
+      if (!window.confirm('كل الآيات معلَّمة بالفعل. إعادة التوقيت بالذكاء الاصطناعي من جديد؟')) return;
+      this.state.starts = [0];
+    }
+
+    this.aiRunning = true;
+    this.aiAbort = new AbortController();
+    const signal = this.aiAbort.signal;
+    this.$('aiAuto').textContent = '⏹ إيقاف AI';
+
+    try {
+      await this.ensureAiModel(signal);
+
+      const CHUNK_SAMPLES = 30 * 16000;
+      const OV_SAMPLES = 2 * 16000;
+      const OV_FRAMES = OV_SAMPLES / 320;
+      let tail = new Float32Array(0);
+      let bufParts = [], bufLen = 0, processedSamples = 0;
+      const emChunks = [];
+
+      const flushChunk = async (pcmCore) => {
+        if (signal.aborted) throw new Error('aborted');
+        const wav = new Float32Array(tail.length + pcmCore.length);
+        wav.set(tail, 0);
+        wav.set(pcmCore, tail.length);
+        let sum = 0; for (let i = 0; i < wav.length; i++) sum += wav[i];
+        const mean = sum / wav.length;
+        let sq = 0; for (let i = 0; i < wav.length; i++) { const d = wav[i] - mean; sq += d * d; }
+        const inv = 1 / Math.sqrt(sq / wav.length + 1e-7);
+        for (let i = 0; i < wav.length; i++) wav[i] = (wav[i] - mean) * inv;
+
+        const feeds = { input_values: new window.ort.Tensor('float32', wav, [1, wav.length]) };
+        if (this.aiSess.inputNames.includes('attention_mask')) {
+          feeds.attention_mask = new window.ort.Tensor('int64', new BigInt64Array(wav.length).fill(1n), [1, wav.length]);
+        }
+        const out = await this.aiSess.run(feeds);
+        const tensor = out[this.aiSess.outputNames[0]];
+        const dropLeft = tail.length === OV_SAMPLES ? OV_FRAMES : Math.floor(tail.length / 320);
+        emChunks.push(this.quantizeLogSoftmax(tensor.data, tensor.dims[1], tensor.dims[2], dropLeft));
+
+        tail = pcmCore.length >= OV_SAMPLES
+          ? pcmCore.slice(pcmCore.length - OV_SAMPLES)
+          : new Float32Array(0);
+        processedSamples += pcmCore.length;
+        const doneMs = Math.round((processedSamples * 1000) / 16000);
+        const dur = this.state.duration || doneMs;
+        const pct = dur ? Math.min(100, Math.round((doneMs * 100) / dur)) : 0;
+        this.say(`🤖 ذكاء اصطناعي: ${fmt(doneMs)} / ${fmt(dur)} (${pct}%)`);
+        await new Promise((r) => setTimeout(r, 0));
+      };
+
+      const feedPcm = async (pcm) => {
+        bufParts.push(pcm);
+        bufLen += pcm.length;
+        while (bufLen >= CHUNK_SAMPLES) {
+          const merged = new Float32Array(bufLen);
+          let off = 0; for (const p of bufParts) { merged.set(p, off); off += p.length; }
+          await flushChunk(merged.subarray(0, CHUNK_SAMPLES));
+          const rem = merged.slice(CHUNK_SAMPLES);
+          bufParts = rem.length ? [rem] : [];
+          bufLen = rem.length;
+        }
+      };
+
+      if (this.audioBlob.size > 35 * 1024 * 1024 && await this.isMp3Blob(this.audioBlob, this.state.label)) {
+        await this.decodeChunkedMp3(this.audioBlob, async (pcm) => { await feedPcm(pcm); }, signal);
+      } else {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        try {
+          const decoded = await ctx.decodeAudioData(await this.audioBlob.arrayBuffer());
+          const pcm = decoded.getChannelData(0);
+          for (let off = 0; off < pcm.length; off += CHUNK_SAMPLES) {
+            await flushChunk(pcm.subarray(off, Math.min(pcm.length, off + CHUNK_SAMPLES)));
+          }
+        } finally {
+          ctx.close().catch(() => {});
+        }
+      }
+
+      if (bufLen > 0) {
+        const rem = new Float32Array(bufLen);
+        let off = 0; for (const p of bufParts) { rem.set(p, off); off += p.length; }
+        await flushChunk(rem);
+      }
+      if (signal.aborted) throw new Error('aborted');
+
+      this.say('🤖 جارٍ مطابقة الآيات مع الصوت…');
+      await new Promise((r) => setTimeout(r, 10));
+      const V = emChunks[0]?.V || (Math.max(...Object.values(this.aiVocab)) + 3);
+      const totalFrames = emChunks.reduce((a, c) => a + c.frames, 0);
+      const em = new Uint8Array(totalFrames * V);
+      let emOff = 0; for (const c of emChunks) { em.set(c.q, emOff); emOff += c.q.length; }
+
+      const ayahTokens = this.state.texts.map((t, i) => {
+        let txt = t.replace(/^\uFEFF/, '');
+        if (i === 0 && this.state.surah !== 1 && this.state.surah !== 9 && txt.startsWith('بِسْمِ')) {
+          txt = txt.split(' ').slice(4).join(' ');
+        }
+        return this.normalizeForVocab(txt, this.aiVocab);
+      });
+      const blankId = this.aiVocab['<pad>'] ?? 33;
+      const rawStarts = this.alignCtc(em, totalFrames, V, ayahTokens, blankId, 2500);
+      if (!rawStarts) throw new Error('تعذّرت المحاذاة');
+
+      const totalMs = this.state.duration || Math.round((processedSamples * 1000) / 16000);
+      const refined = this.refineOnset(rawStarts, totalMs);
+      this.state.starts = [0, ...refined];
+      this.changed();
+      this.say('تم التوقيت بالذكاء الاصطناعي · راجِع العلامات إن لزم.');
+    } catch (err) {
+      if (err.message === 'aborted') this.say('أُوقف التوقيت بالذكاء الاصطناعي.');
+      else this.say('تعذّر التوقيت بالذكاء الاصطناعي: ' + err.message, true);
+    } finally {
+      this.cancelAi();
+    }
   }
   // Each verse runs from its start to the next marked start; the last verse
   // to the end of the file. The opening (ayah 0) runs from 0 to verse 1.
