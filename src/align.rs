@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use crate::audio::stream_pcm_16k;
 use crate::quran::{cache_dir, fmt_ms, http_client, normalize_for_vocab, strip_basmala_for_align};
@@ -513,7 +514,7 @@ fn align_ctc(
                 }
                 let pct = 95 + ((t * 4) / n_frames).min(4) as u8;
                 on_progress(AiProgress {
-                    text: "🤖 جارٍ مطابقة الآيات مع الصوت…".into(),
+                    text: "جارٍ مطابقة الآيات مع الصوت…".into(),
                     pct: Some(pct),
                     done: false,
                     err: None,
@@ -634,6 +635,13 @@ fn refine_onset(starts: &[u64], energy: &[f32], total_ms: u64) -> Vec<u64> {
     out
 }
 
+struct OrtCache {
+    env: Option<ort::environment::Environment>,
+    session: Option<(PathBuf, ort::session::Session)>,
+}
+
+static ORT_CACHE: OnceLock<Mutex<OrtCache>> = OnceLock::new();
+
 pub fn run_ai_alignment(
     audio_path: &Path,
     model_path: &Path,
@@ -655,13 +663,33 @@ pub fn run_ai_alignment(
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().min(4))
         .unwrap_or(2);
-    let env = ort::init().build().map_err(|e| anyhow!("{e}"))?;
-    let mut sess = ort::session::Session::builder(&env)
-        .map_err(|e| anyhow!("{e}"))?
-        .with_intra_threads(threads)
-        .map_err(|e| anyhow!("{e}"))?
-        .commit_from_file(model_path)
-        .map_err(|e| anyhow!("{e}"))?;
+    let mut cache = ORT_CACHE
+        .get_or_init(|| {
+            Mutex::new(OrtCache {
+                env: None,
+                session: None,
+            })
+        })
+        .lock()
+        .map_err(|_| anyhow!("ORT cache lock poisoned"))?;
+    if cache.env.is_none() {
+        cache.env = Some(ort::init().build().map_err(|e| anyhow!("{e}"))?);
+    }
+    let need_session = match &cache.session {
+        Some((p, _)) => p != model_path,
+        None => true,
+    };
+    if need_session {
+        let env = cache.env.as_ref().unwrap();
+        let sess = ort::session::Session::builder(env)
+            .map_err(|e| anyhow!("{e}"))?
+            .with_intra_threads(threads)
+            .map_err(|e| anyhow!("{e}"))?
+            .commit_from_file(model_path)
+            .map_err(|e| anyhow!("{e}"))?;
+        cache.session = Some((model_path.to_path_buf(), sess));
+    }
+    let sess = &mut cache.session.as_mut().unwrap().1;
 
     let v_len = vocab.values().copied().max().unwrap_or(33) + 3;
     let blank_id = *vocab.get("<pad>").unwrap_or(&33);
@@ -703,7 +731,7 @@ pub fn run_ai_alignment(
             None
         };
         on_progress(AiProgress {
-            text: format!("🤖 تحليل الصوت: {} / {}", fmt_ms(done_ms), fmt_ms(dur_ms)),
+            text: format!("تحليل الصوت: {} / {}", fmt_ms(done_ms), fmt_ms(dur_ms)),
             pct,
             done: false,
             err: None,
@@ -712,7 +740,7 @@ pub fn run_ai_alignment(
     })?;
 
     on_progress(AiProgress {
-        text: "🤖 جارٍ مطابقة الآيات مع الصوت…".into(),
+        text: "جارٍ مطابقة الآيات مع الصوت…".into(),
         pct: Some(96),
         done: false,
         err: None,
@@ -784,7 +812,20 @@ mod tests {
             &|_| {},
         )
         .unwrap();
+        let starts2 = run_ai_alignment(
+            &tmp,
+            &model_path,
+            &vocab,
+            &st.texts,
+            1,
+            &analysis.energy,
+            analysis.duration_ms,
+            &cancel,
+            &|_| {},
+        )
+        .unwrap();
         let _ = std::fs::remove_file(&tmp);
+        assert_eq!(starts, starts2);
         assert_eq!(starts.len(), 7);
         for w in starts.windows(2) {
             assert!(w[1] > w[0], "non-monotonic: {starts:?}");

@@ -227,6 +227,7 @@ enum Message {
     ResetMarks,
     AutoHeuristic,
     ToggleAiAlign,
+    DismissAiProgress,
     AiFinished(Result<Vec<u64>, String>),
     Wave(WaveEvent),
     ZoomChanged(f32),
@@ -765,7 +766,10 @@ impl App {
                     self.selector_query = format!("\u{200E}{clean}");
                 } else {
                     self.selector_query = format!("\u{200E}{clean}");
-                    return text_input::move_cursor_to_end(search_input_id());
+                    return Task::batch([
+                        text_input::focus(search_input_id()),
+                        text_input::move_cursor_to_end(search_input_id()),
+                    ]);
                 }
             }
             Message::ClearSelectorQuery => {
@@ -1118,6 +1122,11 @@ impl App {
                     },
                     Message::AiFinished,
                 );
+            }
+            Message::DismissAiProgress => {
+                if !self.ai_running {
+                    self.ai_progress = None;
+                }
             }
             Message::AiFinished(Ok(starts)) => {
                 self.ai_running = false;
@@ -1985,26 +1994,30 @@ impl App {
         );
 
         // Waveform & transport studio
-        let wave_el = view_waveform(WaveformProgram {
-            peaks: &self.peaks,
-            duration_ms: self.duration_ms,
-            starts: &self.starts,
-            now_ms: self.now_ms,
-            current_ayah: cur,
-            zoom: self.zoom,
-            scroll_frac: self.scroll_frac,
-            font: ui,
-            colors: WaveColors {
-                bg: p.bg,
-                line: p.line,
-                muted: p.muted,
-                wave: p.wave,
-                wave_played: p.wave_played,
-                verse: p.verse,
-                mark: p.mark,
-                now: p.now,
+        let wave_h = if self.ai_progress.is_some() { 82.0 } else { 114.0 };
+        let wave_el = view_waveform(
+            WaveformProgram {
+                peaks: &self.peaks,
+                duration_ms: self.duration_ms,
+                starts: &self.starts,
+                now_ms: self.now_ms,
+                current_ayah: cur,
+                zoom: self.zoom,
+                scroll_frac: self.scroll_frac,
+                font: ui,
+                colors: WaveColors {
+                    bg: p.bg,
+                    line: p.line,
+                    muted: p.muted,
+                    wave: p.wave,
+                    wave_played: p.wave_played,
+                    verse: p.verse,
+                    mark: p.mark,
+                    now: p.now,
+                },
             },
-        })
+            wave_h,
+        )
         .map(Message::Wave);
 
         let zoom_bar = row![
@@ -2142,7 +2155,7 @@ impl App {
         .spacing(7)
         .align_y(alignment::Vertical::Center);
 
-        let mut studio_col = column![
+        let studio_col = column![
             verse_stage,
             self.card(
                 column![
@@ -2167,35 +2180,6 @@ impl App {
         ]
         .spacing(10)
         .width(Length::FillPortion(6));
-
-        if let Some(ap) = &self.ai_progress {
-            let bar_pct = ap.pct.unwrap_or(40) as f32;
-            let bar_card = container(
-                column![
-                    row![
-                        text(ap.pct.map(|v| format!("{v}%")).unwrap_or_else(|| "…".into()))
-                            .size(12)
-                            .color(p.accent),
-                        Space::with_width(Length::Fill),
-                        ar(&ap.text, ui).size(12),
-                    ]
-                    .align_y(alignment::Vertical::Center),
-                    progress_bar(0.0..=100.0, bar_pct).height(5),
-                ]
-                .spacing(5),
-            )
-            .padding(8)
-            .style(move |_| container::Style {
-                background: Some(p.panel2.into()),
-                border: border::Border {
-                    color: if ap.err.is_some() { p.danger } else { p.accent },
-                    width: 1.0,
-                    radius: 10.0.into(),
-                },
-                ..Default::default()
-            });
-            studio_col = studio_col.push(bar_card);
-        }
 
         // Inspector column (on LEFT in RTL layout)
         let insp_tabs = row![
@@ -2420,7 +2404,53 @@ impl App {
             .height(Length::Fill)
             .align_y(alignment::Vertical::Top);
 
-        let base_ui: Element<'_, Message> = container(column![header, source_panel, workspace].spacing(10).height(Length::Fill))
+        let mut main_col = column![header, source_panel].spacing(8).height(Length::Fill);
+
+        if let Some(ap) = &self.ai_progress {
+            let is_err = ap.err.is_some();
+            let bar_pct = ap.pct.unwrap_or(35) as f32;
+            let action_btn: Element<'_, Message> = if self.ai_running {
+                self.btn_danger(ar("■ إيقاف", ui).size(11.5), [3, 9], Message::ToggleAiAlign)
+                    .into()
+            } else {
+                self.btn_ghost(text("×").size(12), [3, 8], Message::DismissAiProgress)
+                    .into()
+            };
+            let ai_banner = container(
+                column![
+                    row![
+                        action_btn,
+                        text(ap.pct.map(|v| format!("{v}%")).unwrap_or_else(|| "…".into()))
+                            .size(12.5)
+                            .color(if is_err { p.danger } else { p.accent }),
+                        Space::with_width(Length::Fill),
+                        ar(&ap.text, ui)
+                            .size(12.5)
+                            .color(if is_err { p.danger } else { p.ink }),
+                    ]
+                    .spacing(8)
+                    .align_y(alignment::Vertical::Center),
+                    progress_bar(0.0..=100.0, bar_pct).height(7),
+                ]
+                .spacing(5),
+            )
+            .width(Length::Fill)
+            .padding([8, 12])
+            .style(move |_| container::Style {
+                background: Some(if is_err { p.danger_soft } else { p.soft }.into()),
+                border: border::Border {
+                    color: if is_err { p.danger } else { p.accent },
+                    width: 1.5,
+                    radius: 10.0.into(),
+                },
+                ..Default::default()
+            });
+            main_col = main_col.push(ai_banner);
+        }
+
+        main_col = main_col.push(workspace);
+
+        let base_ui: Element<'_, Message> = container(main_col)
             .padding([10, 14])
             .width(Length::Fill)
             .height(Length::Fill)

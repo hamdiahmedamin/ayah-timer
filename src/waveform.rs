@@ -301,6 +301,6 @@ impl<'a> canvas::Program<WaveEvent> for WaveformProgram<'a> {
     }
 }
 
-pub fn view_waveform<'a>(prog: WaveformProgram<'a>) -> Element<'a, WaveEvent> {
-    Canvas::new(prog).width(Length::Fill).height(Length::Fixed(114.0)).into()
+pub fn view_waveform<'a>(prog: WaveformProgram<'a>, height: f32) -> Element<'a, WaveEvent> {
+    Canvas::new(prog).width(Length::Fill).height(Length::Fixed(height)).into()
 }
