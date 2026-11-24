@@ -1,5 +1,6 @@
 mod align;
 mod audio;
+mod export_audio;
 mod quran;
 mod timing;
 mod waveform;
@@ -23,6 +24,9 @@ use std::time::Duration;
 
 use align::{auto_heuristic, ensure_ai_model, run_ai_alignment, AiProgress};
 use audio::{analyze_audio_file, AudioAnalysis, AudioPlayer};
+use export_audio::{
+    compress_audio, format_bytes, split_audio_by_ayahs, AudioExportOpts, AudioFormat, NamingMode,
+};
 use quran::{
     ar_digits, cache_dir, ensure_fonts, fetch_published_timings, fetch_reciters_and_timed_reads,
     fetch_surah_text, fmt_ms, http_client, load_cached_fonts_sync, norm_url, normalize_search,
@@ -36,7 +40,7 @@ use waveform::{view_waveform, WaveColors, WaveEvent, WaveformProgram};
 
 fn main() -> iced::Result {
     let preloaded = load_cached_fonts_sync();
-    let mut app_builder = iced::application("Ayah Timer · مؤقِّت الآيات", App::update, App::view)
+    let mut app_builder = iced::application("Ayah Timer", App::update, App::view)
         .subscription(App::subscription)
         .theme(App::theme)
         .window_size((1340.0, 860.0));
@@ -92,6 +96,14 @@ fn search_input_id() -> text_input::Id {
     text_input::Id::new("selector_search")
 }
 
+fn mushaf_scroll_id() -> scrollable::Id {
+    scrollable::Id::new("mushaf_scroll")
+}
+
+fn table_scroll_id() -> scrollable::Id {
+    scrollable::Id::new("table_scroll")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ArOption {
     idx: usize,
@@ -127,6 +139,7 @@ enum InspectorTab {
     Table,
     Mushaf,
     Io,
+    Audio,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,6 +255,21 @@ enum Message {
     TableInputChanged(usize, String),
     TableInputSubmit(usize),
     FullFieldsToggled(bool),
+    JsonMinifiedToggled(bool),
+    MushafFontDelta(f32),
+    JumpToCurrentAyah,
+    StepAyah(i32),
+    ExportFormatPicked(AudioFormat),
+    ExportBitratePicked(u32),
+    ExportMonoToggled(bool),
+    ExportIntroToggled(bool),
+    ExportNamingPicked(NamingMode),
+    StartSplitAudio,
+    SplitDirPicked(Option<PathBuf>),
+    StartCompressAudio,
+    CompressDestPicked(Option<PathBuf>),
+    CancelExport,
+    ExportFinished(Result<String, String>),
     JsonAction(text_editor::Action),
     ImportFromText,
     ImportFromFile,
@@ -308,6 +336,10 @@ struct App {
     reaction_ms: u64,
     snap: bool,
     full_fields: bool,
+    json_minified: bool,
+    mushaf_font_size: f32,
+    export_opts: AudioExportOpts,
+    export_running: bool,
 
     table_inputs: HashMap<usize, String>,
     json_content: text_editor::Content,
@@ -380,6 +412,10 @@ impl App {
             reaction_ms: 250,
             snap: true,
             full_fields: true,
+            json_minified: false,
+            mushaf_font_size: 26.0,
+            export_opts: AudioExportOpts::default(),
+            export_running: false,
             table_inputs: HashMap::new(),
             json_content: text_editor::Content::new(),
             status: String::new(),
@@ -534,7 +570,14 @@ impl App {
 
     fn sync_json_and_inputs(&mut self) {
         let pages = self.surah_text.as_ref().map(|t| t.pages.as_slice());
-        let j = export_json(&self.starts, self.count(), self.duration_ms, pages, self.full_fields);
+        let j = export_json(
+            &self.starts,
+            self.count(),
+            self.duration_ms,
+            pages,
+            self.full_fields,
+            self.json_minified,
+        );
         self.json_content = text_editor::Content::with_text(&j);
         self.table_inputs.clear();
         for a in 1..=self.count() {
@@ -691,6 +734,49 @@ impl App {
     fn say(&mut self, msg: impl Into<String>, err: bool) {
         self.status = msg.into();
         self.status_err = err;
+    }
+
+    fn scroll_inspector_to(&self, ayah: usize) -> Task<Message> {
+        match self.inspector_tab {
+            InspectorTab::Table => {
+                let y = (ayah as f32 * 39.0 - 140.0).max(0.0);
+                scrollable::scroll_to(table_scroll_id(), scrollable::AbsoluteOffset { x: 0.0, y })
+            }
+            InspectorTab::Mushaf => {
+                let Some(st) = &self.surah_text else {
+                    return Task::none();
+                };
+                let ed = self.text_edition();
+                let mut y = 0.0f32;
+                if self.surah != 9 && !(self.surah == 1 && ed == TextEdition::Hafs) {
+                    y += 44.0;
+                }
+                let line_px = self.mushaf_font_size * 1.9;
+                let chars_per_line = (380.0 / (self.mushaf_font_size * 0.52)).max(16.0);
+                let mut prev_page: Option<u32> = None;
+                for (i, t) in st.texts.iter().enumerate() {
+                    let a = i + 1;
+                    let pg = st.pages.get(i).copied().flatten();
+                    if pg.is_some() && pg != prev_page {
+                        prev_page = pg;
+                        y += 28.0;
+                    }
+                    if a >= ayah {
+                        break;
+                    }
+                    let lines = ((t.chars().count() as f32 + 6.0) / chars_per_line).ceil().max(1.0);
+                    y += lines * line_px + 28.0;
+                }
+                scrollable::scroll_to(
+                    mushaf_scroll_id(),
+                    scrollable::AbsoluteOffset {
+                        x: 0.0,
+                        y: (y - 110.0).max(0.0),
+                    },
+                )
+            }
+            _ => Task::none(),
+        }
     }
 
     fn update(&mut self, msg: Message) -> Task<Message> {
@@ -942,6 +1028,7 @@ impl App {
                 }
             }
             Message::Tick => {
+                let mut scroll_task = Task::none();
                 if self.player.has_audio() {
                     let pos = self.player.position_ms();
                     self.now_ms = pos.min(self.duration_ms.max(pos));
@@ -951,9 +1038,12 @@ impl App {
                     let cur = current_ayah(&self.starts, self.now_ms);
                     if cur != self.last_cur {
                         self.last_cur = cur;
+                        if self.follow {
+                            scroll_task = self.scroll_inspector_to(cur);
+                        }
                     }
                 }
-                if self.ai_running {
+                if self.ai_running || self.export_running {
                     let prog = self.ai_progress_slot.lock().ok().and_then(|g| g.clone());
                     if let Some(p) = prog {
                         let txt = p.text.clone();
@@ -962,6 +1052,7 @@ impl App {
                         self.say(txt, err);
                     }
                 }
+                return scroll_task;
             }
             Message::TogglePlay => {
                 if self.player.has_audio() {
@@ -973,8 +1064,11 @@ impl App {
                     let clamped = ms.min(self.duration_ms);
                     self.now_ms = clamped;
                     self.player.seek(clamped);
+                    let cur = current_ayah(&self.starts, self.now_ms);
+                    self.last_cur = cur;
                     if self.follow {
                         self.reveal_now();
+                        return self.scroll_inspector_to(cur);
                     }
                 }
             }
@@ -1058,6 +1152,10 @@ impl App {
                     self.say("أُوقف التوقيت بالذكاء الاصطناعي.", false);
                     return Task::none();
                 }
+                if self.export_running {
+                    self.say("عملية تصدير الصوت قيد التشغيل…", true);
+                    return Task::none();
+                }
                 let Some(audio_path) = self.audio_path.clone() else {
                     self.say("حمّل التلاوة أولًا.", true);
                     return Task::none();
@@ -1124,7 +1222,7 @@ impl App {
                 );
             }
             Message::DismissAiProgress => {
-                if !self.ai_running {
+                if !self.ai_running && !self.export_running {
                     self.ai_progress = None;
                 }
             }
@@ -1193,7 +1291,11 @@ impl App {
             }
             Message::ScrollChanged(f) => self.scroll_frac = f.clamp(0.0, 1.0),
             Message::FollowToggled(f) => self.follow = f,
-            Message::InspectorChanged(tab) => self.inspector_tab = tab,
+            Message::InspectorChanged(tab) => {
+                self.inspector_tab = tab;
+                let cur = current_ayah(&self.starts, self.now_ms);
+                return self.scroll_inspector_to(cur);
+            }
             Message::PlayAyah(a) => {
                 if self.player.has_audio() {
                     let pages = self.surah_text.as_ref().map(|t| t.pages.as_slice());
@@ -1201,7 +1303,12 @@ impl App {
                     if let Some(row) = tl.get(a) {
                         if let Some(st) = row.start {
                             self.now_ms = st;
+                            self.last_cur = a;
                             self.player.play_span(st, row.end);
+                            if self.follow {
+                                self.reveal_now();
+                            }
+                            return self.scroll_inspector_to(a);
                         }
                     }
                 }
@@ -1247,6 +1354,194 @@ impl App {
                 self.full_fields = f;
                 self.sync_json_and_inputs();
             }
+            Message::JsonMinifiedToggled(m) => {
+                self.json_minified = m;
+                self.sync_json_and_inputs();
+            }
+            Message::MushafFontDelta(d) => {
+                self.mushaf_font_size = (self.mushaf_font_size + d).clamp(18.0, 38.0);
+            }
+            Message::JumpToCurrentAyah => {
+                let cur = current_ayah(&self.starts, self.now_ms);
+                self.last_cur = cur;
+                self.reveal_now();
+                return self.scroll_inspector_to(cur);
+            }
+            Message::StepAyah(delta) => {
+                let cur = current_ayah(&self.starts, self.now_ms) as i32;
+                let target = (cur + delta).clamp(0, self.count() as i32) as usize;
+                if let Some(st) = self.starts.get(target).copied().flatten() {
+                    self.now_ms = st;
+                    self.last_cur = target;
+                    self.player.seek(st);
+                    self.reveal_now();
+                    return self.scroll_inspector_to(target);
+                }
+            }
+            Message::ExportFormatPicked(fmt) => self.export_opts.format = fmt,
+            Message::ExportBitratePicked(br) => self.export_opts.bitrate_kbps = br,
+            Message::ExportMonoToggled(m) => self.export_opts.mono = m,
+            Message::ExportIntroToggled(inc) => self.export_opts.include_intro = inc,
+            Message::ExportNamingPicked(n) => self.export_opts.naming = n,
+            Message::StartSplitAudio => {
+                if self.ai_running || self.export_running {
+                    return Task::none();
+                }
+                if self.audio_path.is_none() {
+                    self.say("حمّل التلاوة أولًا.", true);
+                    return Task::none();
+                }
+                return Task::perform(
+                    async { rfd::AsyncFileDialog::new().pick_folder().await.map(|h| h.path().to_path_buf()) },
+                    Message::SplitDirPicked,
+                );
+            }
+            Message::SplitDirPicked(Some(dir)) => {
+                let Some(audio_path) = self.audio_path.clone() else {
+                    return Task::none();
+                };
+                let pages = self.surah_text.as_ref().map(|t| t.pages.as_slice());
+                let rows = build_timeline(&self.starts, self.count(), self.duration_ms, pages);
+                let surah = self.surah;
+                let opts = self.export_opts;
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.ai_cancel = Arc::clone(&cancel);
+                self.export_running = true;
+                let slot = Arc::clone(&self.ai_progress_slot);
+                let init_prog = AiProgress {
+                    text: "جارٍ تحضير تقسيم الآيات…".into(),
+                    pct: Some(0),
+                    done: false,
+                    err: None,
+                };
+                self.ai_progress = Some(init_prog.clone());
+                if let Ok(mut g) = slot.lock() {
+                    *g = Some(init_prog);
+                }
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let report = |p: AiProgress| {
+                                if let Ok(mut g) = slot.lock() {
+                                    *g = Some(p);
+                                }
+                            };
+                            let (cnt, bytes) =
+                                split_audio_by_ayahs(&audio_path, &dir, surah, &rows, &opts, &cancel, &report)
+                                    .map_err(|e| e.to_string())?;
+                            Ok(format!(
+                                "تم تقسيم {cnt} آية ({}) في {}",
+                                format_bytes(bytes),
+                                dir.display()
+                            ))
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?
+                    },
+                    Message::ExportFinished,
+                );
+            }
+            Message::SplitDirPicked(None) => {}
+            Message::StartCompressAudio => {
+                if self.ai_running || self.export_running {
+                    return Task::none();
+                }
+                if self.audio_path.is_none() {
+                    self.say("حمّل التلاوة أولًا.", true);
+                    return Task::none();
+                }
+                let ext = if self.export_opts.format == AudioFormat::Copy {
+                    "mp3"
+                } else {
+                    self.export_opts.format.ext()
+                };
+                let def_name = format!("{:03}_compressed.{ext}", self.surah);
+                return Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_file_name(&def_name)
+                            .save_file()
+                            .await
+                            .map(|h| h.path().to_path_buf())
+                    },
+                    Message::CompressDestPicked,
+                );
+            }
+            Message::CompressDestPicked(Some(dest)) => {
+                let Some(audio_path) = self.audio_path.clone() else {
+                    return Task::none();
+                };
+                let opts = self.export_opts;
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.ai_cancel = Arc::clone(&cancel);
+                self.export_running = true;
+                let slot = Arc::clone(&self.ai_progress_slot);
+                let init_prog = AiProgress {
+                    text: "جارٍ ضغط الملف الصوتي…".into(),
+                    pct: Some(20),
+                    done: false,
+                    err: None,
+                };
+                self.ai_progress = Some(init_prog.clone());
+                if let Ok(mut g) = slot.lock() {
+                    *g = Some(init_prog);
+                }
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let report = |p: AiProgress| {
+                                if let Ok(mut g) = slot.lock() {
+                                    *g = Some(p);
+                                }
+                            };
+                            let (src_b, dst_b) = compress_audio(&audio_path, &dest, &opts, &cancel, &report)
+                                .map_err(|e| e.to_string())?;
+                            Ok(format!(
+                                "تم الضغط: {} ← {}",
+                                format_bytes(dst_b),
+                                format_bytes(src_b)
+                            ))
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?
+                    },
+                    Message::ExportFinished,
+                );
+            }
+            Message::CompressDestPicked(None) => {}
+            Message::CancelExport => {
+                if self.export_running {
+                    self.ai_cancel.store(true, Ordering::Relaxed);
+                    self.export_running = false;
+                    self.ai_progress = None;
+                    self.say("أُوقفت عملية التصدير.", false);
+                }
+            }
+            Message::ExportFinished(Ok(msg)) => {
+                self.export_running = false;
+                self.ai_progress = Some(AiProgress {
+                    text: msg.clone(),
+                    pct: Some(100),
+                    done: true,
+                    err: None,
+                });
+                self.say(msg, false);
+            }
+            Message::ExportFinished(Err(e)) => {
+                self.export_running = false;
+                if e == "aborted" {
+                    self.ai_progress = None;
+                    self.say("أُوقفت عملية التصدير.", false);
+                } else {
+                    self.ai_progress = Some(AiProgress {
+                        text: e.clone(),
+                        pct: Some(0),
+                        done: false,
+                        err: Some(e.clone()),
+                    });
+                    self.say(e, true);
+                }
+            }
             Message::JsonAction(act) => self.json_content.perform(act),
             Message::ImportFromText => {
                 let txt = self.json_content.text();
@@ -1282,7 +1577,14 @@ impl App {
             Message::ImportFileLoaded(None) => {}
             Message::DownloadJson => {
                 let pages = self.surah_text.as_ref().map(|t| t.pages.as_slice());
-                let json = export_json(&self.starts, self.count(), self.duration_ms, pages, self.full_fields);
+                let json = export_json(
+                    &self.starts,
+                    self.count(),
+                    self.duration_ms,
+                    pages,
+                    self.full_fields,
+                    self.json_minified,
+                );
                 let default_name = format!("{:03}.json", self.surah);
                 return Task::perform(
                     async move {
@@ -1300,7 +1602,14 @@ impl App {
             }
             Message::CopyJson => {
                 let pages = self.surah_text.as_ref().map(|t| t.pages.as_slice());
-                let json = export_json(&self.starts, self.count(), self.duration_ms, pages, self.full_fields);
+                let json = export_json(
+                    &self.starts,
+                    self.count(),
+                    self.duration_ms,
+                    pages,
+                    self.full_fields,
+                    self.json_minified,
+                );
                 if let Ok(mut cb) = arboard::Clipboard::new() {
                     let _ = cb.set_text(json);
                     self.say("نُسخ.", false);
@@ -1361,6 +1670,8 @@ impl App {
                     Key::Named(Named::ArrowRight) => {
                         return self.update(Message::Seek(self.now_ms + 5000))
                     }
+                    Key::Character("[") => return self.update(Message::StepAyah(-1)),
+                    Key::Character("]") => return self.update(Message::StepAyah(1)),
                     _ => {}
                 }
             }
@@ -1663,6 +1974,36 @@ impl App {
         .into()
     }
 
+    fn styled_scrollable<'a>(
+        &self,
+        content: impl Into<Element<'a, Message>>,
+    ) -> scrollable::Scrollable<'a, Message> {
+        let p = self.pal();
+        scrollable(content).style(move |_, status| {
+            let scroller_col = match status {
+                scrollable::Status::Hovered { .. } | scrollable::Status::Dragged { .. } => p.accent,
+                scrollable::Status::Active => p.line,
+            };
+            let rail = scrollable::Rail {
+                background: Some(Color::TRANSPARENT.into()),
+                border: border::Border::default(),
+                scroller: scrollable::Scroller {
+                    color: scroller_col,
+                    border: border::Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    },
+                },
+            };
+            scrollable::Style {
+                container: container::Style::default(),
+                vertical_rail: rail,
+                horizontal_rail: rail,
+                gap: None,
+            }
+        })
+    }
+
     fn view(&self) -> Element<'_, Message> {
         let p = self.pal();
         let ui = self.ui_font;
@@ -1883,11 +2224,7 @@ impl App {
             }
         } else if let Some(st) = &self.surah_text {
             if let Some(txt) = st.texts.get(cur - 1) {
-                if ed == TextEdition::Hafs {
-                    format!("{txt} ﴿{cur}﴾")
-                } else {
-                    format!("{txt}\u{00A0}{}", ar_digits(cur))
-                }
+                format!("{txt} ﴿{}﴾", ar_digits(cur))
             } else {
                 format!("الآية {cur}")
             }
@@ -1945,6 +2282,11 @@ impl App {
                 row![
                     ar(riw_meta, ui).size(11.5).color(p.muted),
                     Space::with_width(Length::Fill),
+                    self.btn_ghost(
+                        text("‹").size(13).shaping(text::Shaping::Advanced),
+                        [2, 8],
+                        Message::StepAyah(-1),
+                    ),
                     container(
                         ar(
                             if cur == 0 {
@@ -1966,19 +2308,32 @@ impl App {
                         },
                         ..Default::default()
                     }),
+                    self.btn_ghost(
+                        text("›").size(13).shaping(text::Shaping::Advanced),
+                        [2, 8],
+                        Message::StepAyah(1),
+                    ),
                 ]
+                .spacing(5)
                 .align_y(alignment::Vertical::Center),
                 container(
-                    text(rtl(&cur_text))
-                        .size(26)
-                        .line_height(1.65)
-                        .font(qfont)
-                        .shaping(text::Shaping::Advanced)
-                        .align_x(alignment::Horizontal::Center)
+                    self.styled_scrollable(
+                        container(
+                            text(rtl(&cur_text))
+                                .size(25)
+                                .line_height(1.85)
+                                .font(qfont)
+                                .shaping(text::Shaping::Advanced)
+                                .align_x(alignment::Horizontal::Center)
+                        )
+                        .width(Length::Fill)
+                        .center_x(Length::Fill)
+                        .padding([4, 8])
+                    )
+                    .height(Length::Fixed(68.0))
                 )
-                .padding([8, 14])
+                .padding([4, 8])
                 .width(Length::Fill)
-                .center_x(Length::Fill)
                 .style(move |_| container::Style {
                     background: Some(p.panel2.into()),
                     border: border::Border {
@@ -2183,13 +2538,14 @@ impl App {
 
         // Inspector column (on LEFT in RTL layout)
         let insp_tabs = row![
-            self.btn_ghost(ar("تنزيل JSON", ui).size(12), [5, 10], Message::DownloadJson),
+            self.btn_ghost(ar("تنزيل JSON", ui).size(11.5), [5, 9], Message::DownloadJson),
             Space::with_width(Length::Fill),
-            self.seg_btn("JSON واستيراد", self.inspector_tab == InspectorTab::Io, Message::InspectorChanged(InspectorTab::Io)),
+            self.seg_btn("الصوت", self.inspector_tab == InspectorTab::Audio, Message::InspectorChanged(InspectorTab::Audio)),
+            self.seg_btn("JSON", self.inspector_tab == InspectorTab::Io, Message::InspectorChanged(InspectorTab::Io)),
             self.seg_btn("المصحف", self.inspector_tab == InspectorTab::Mushaf, Message::InspectorChanged(InspectorTab::Mushaf)),
             self.seg_btn("الآيات", self.inspector_tab == InspectorTab::Table, Message::InspectorChanged(InspectorTab::Table)),
         ]
-        .spacing(5)
+        .spacing(4)
         .align_y(alignment::Vertical::Center);
 
         let pages_slice = self.surah_text.as_ref().map(|t| t.pages.as_slice());
@@ -2310,88 +2666,288 @@ impl App {
                     });
                     rows_col = rows_col.push(row_box);
                 }
-                column![header_row, scrollable(rows_col).height(Length::Fill)]
-                    .spacing(4)
-                    .height(Length::Fill)
-                    .into()
+                column![
+                    header_row,
+                    self.styled_scrollable(
+                        container(rows_col).padding(Padding {
+                            top: 2.0,
+                            right: 14.0,
+                            bottom: 6.0,
+                            left: 2.0,
+                        })
+                    )
+                    .id(table_scroll_id())
+                    .height(Length::Fill),
+                ]
+                .spacing(4)
+                .height(Length::Fill)
+                .into()
             }
             InspectorTab::Mushaf => {
-                let mut m_col = column![].spacing(6);
+                let mushaf_bar = row![
+                    self.btn_ghost(ar("A−", ui).size(11.5), [3, 8], Message::MushafFontDelta(-2.0)),
+                    self.btn_ghost(ar("A+", ui).size(11.5), [3, 8], Message::MushafFontDelta(2.0)),
+                    self.btn_soft(ar("الآية الحالية", ui).size(11.5), [3, 9], Message::JumpToCurrentAyah),
+                    Space::with_width(Length::Fill),
+                    ar(
+                        page.map(|pg| format!("صفحة {}", ar_digits(pg as usize)))
+                            .unwrap_or_else(|| ed.ar_name().to_string()),
+                        ui,
+                    )
+                    .size(11.5)
+                    .color(p.muted),
+                ]
+                .spacing(5)
+                .align_y(alignment::Vertical::Center);
+
+                let mut m_col = column![].spacing(8);
                 if let Some(st) = &self.surah_text {
                     if self.surah != 9 && !(self.surah == 1 && ed == TextEdition::Hafs) {
                         m_col = m_col.push(
                             container(
                                 text(rtl("بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ"))
-                                    .size(22)
-                                    .line_height(1.6)
+                                    .size(self.mushaf_font_size)
+                                    .line_height(1.8)
                                     .font(qfont)
                                     .shaping(text::Shaping::Advanced),
                             )
+                            .padding([4, 0])
                             .width(Length::Fill)
                             .center_x(Length::Fill),
                         );
                     }
+                    let mut prev_pg: Option<u32> = None;
                     for (i, t) in st.texts.iter().enumerate() {
                         let a = i + 1;
+                        let pg = st.pages.get(i).copied().flatten();
+                        if let Some(pg_num) = pg {
+                            if Some(pg_num) != prev_pg {
+                                prev_pg = Some(pg_num);
+                                m_col = m_col.push(
+                                    container(
+                                        ar(format!("— صفحة {} —", ar_digits(pg_num as usize)), ui)
+                                            .size(11)
+                                            .color(p.muted),
+                                    )
+                                    .width(Length::Fill)
+                                    .center_x(Length::Fill)
+                                    .padding([2, 0]),
+                                );
+                            }
+                        }
                         let is_now = a == cur;
                         let marked = self.starts.get(a).copied().flatten().is_some();
-                        let line_txt = if ed == TextEdition::Hafs {
-                            format!("{t} ﴿{a}﴾")
-                        } else {
-                            format!("{t}\u{00A0}{}", ar_digits(a))
-                        };
+                        let time_badge = self
+                            .starts
+                            .get(a)
+                            .copied()
+                            .flatten()
+                            .map(fmt_ms)
+                            .unwrap_or_default();
+                        let line_txt = format!("{t} ﴿{}﴾", ar_digits(a));
                         let item = button(
-                            text(rtl(&line_txt))
-                                .size(22)
-                                .line_height(1.65)
-                                .font(qfont)
-                                .shaping(text::Shaping::Advanced)
-                                .width(Length::Fill)
-                                .align_x(alignment::Horizontal::Right)
-                                .color(if marked { p.ink } else { p.muted }),
+                            column![
+                                text(rtl(&line_txt))
+                                    .size(self.mushaf_font_size)
+                                    .line_height(1.9)
+                                    .font(qfont)
+                                    .shaping(text::Shaping::Advanced)
+                                    .width(Length::Fill)
+                                    .align_x(alignment::Horizontal::Right)
+                                    .color(if marked { p.ink } else { p.muted }),
+                                row![
+                                    text(time_badge).size(10.5).color(if is_now { p.accent } else { p.muted }),
+                                    Space::with_width(Length::Fill),
+                                ],
+                            ]
+                            .spacing(2),
                         )
                         .width(Length::Fill)
-                        .padding([6, 10])
+                        .padding([10, 14])
                         .on_press(Message::PlayAyah(a))
-                        .style(move |_, _| button::Style {
-                            background: Some(if is_now { p.verse } else { p.panel2 }.into()),
-                            text_color: p.ink,
-                            border: border::Border {
-                                color: if is_now { p.accent } else { p.line },
-                                width: if is_now { 1.0 } else { 0.5 },
-                                radius: 8.0.into(),
-                            },
-                            ..Default::default()
+                        .style(move |_, status| {
+                            let bg = if is_now {
+                                p.verse
+                            } else if status == button::Status::Hovered {
+                                p.soft
+                            } else {
+                                p.panel2
+                            };
+                            button::Style {
+                                background: Some(bg.into()),
+                                text_color: p.ink,
+                                border: border::Border {
+                                    color: if is_now { p.accent } else { p.line },
+                                    width: if is_now { 1.5 } else { 0.5 },
+                                    radius: 10.0.into(),
+                                },
+                                ..Default::default()
+                            }
                         });
                         m_col = m_col.push(item);
                     }
                 } else {
                     m_col = m_col.push(ar("جارٍ تحميل نص المصحف…", ui).size(13).color(p.muted));
                 }
-                scrollable(m_col).height(Length::Fill).into()
+                column![
+                    mushaf_bar,
+                    self.styled_scrollable(
+                        container(m_col).padding(Padding {
+                            top: 2.0,
+                            right: 14.0,
+                            bottom: 8.0,
+                            left: 2.0,
+                        })
+                    )
+                    .id(mushaf_scroll_id())
+                    .height(Length::Fill),
+                ]
+                .spacing(6)
+                .height(Length::Fill)
+                .into()
             }
-            InspectorTab::Io => column![
-                row![
-                    self.rtl_checkbox("حقول mp3quran الكاملة", self.full_fields, Message::FullFieldsToggled),
-                    Space::with_width(Length::Fill),
-                    self.btn_ghost(ar("نسخ", ui).size(12), [6, 12], Message::CopyJson),
-                    self.btn_primary(ar("تنزيل JSON", ui).size(12), [6, 12], Some(Message::DownloadJson)),
+            InspectorTab::Io => {
+                let json_bytes = self.json_content.text().len() as u64;
+                column![
+                    row![
+                        self.rtl_checkbox("ضغط JSON", self.json_minified, Message::JsonMinifiedToggled),
+                        self.rtl_checkbox("حقول mp3quran", self.full_fields, Message::FullFieldsToggled),
+                        Space::with_width(Length::Fill),
+                        text(format_bytes(json_bytes)).size(11.5).color(p.muted),
+                    ]
+                    .spacing(8)
+                    .align_y(alignment::Vertical::Center),
+                    text_editor(&self.json_content)
+                        .on_action(Message::JsonAction)
+                        .height(Length::Fill),
+                    row![
+                        self.btn_soft(ar("جلب توقيت mp3quran", ui).size(11.5), [6, 9], Message::FetchPublishedTiming),
+                        self.btn_ghost(ar("استيراد ملف", ui).size(11.5), [6, 9], Message::ImportFromFile),
+                        self.btn_ghost(ar("استيراد نص", ui).size(11.5), [6, 9], Message::ImportFromText),
+                        Space::with_width(Length::Fill),
+                        self.btn_ghost(ar("نسخ", ui).size(11.5), [6, 9], Message::CopyJson),
+                        self.btn_primary(ar("تنزيل", ui).size(11.5), [6, 9], Some(Message::DownloadJson)),
+                    ]
+                    .spacing(5)
+                    .align_y(alignment::Vertical::Center),
                 ]
                 .spacing(8)
-                .align_y(alignment::Vertical::Center),
-                text_editor(&self.json_content)
-                    .on_action(Message::JsonAction)
-                    .height(Length::Fill),
-                row![
-                    self.btn_soft(ar("جلب توقيت mp3quran", ui).size(12), [6, 10], Message::FetchPublishedTiming),
-                    self.btn_ghost(ar("استيراد ملف", ui).size(12), [6, 10], Message::ImportFromFile),
-                    self.btn_ghost(ar("استيراد من النص", ui).size(12), [6, 10], Message::ImportFromText),
+                .height(Length::Fill)
+                .into()
+            }
+            InspectorTab::Audio => {
+                let ready_count = tl
+                    .iter()
+                    .filter(|r| match (r.start, r.end) {
+                        (Some(s), Some(e)) => e > s && (r.ayah > 0 || self.export_opts.include_intro),
+                        _ => false,
+                    })
+                    .count();
+                let fmt_row = row![
+                    self.seg_btn(AudioFormat::Copy.label(), self.export_opts.format == AudioFormat::Copy, Message::ExportFormatPicked(AudioFormat::Copy)),
+                    self.seg_btn(AudioFormat::M4a.label(), self.export_opts.format == AudioFormat::M4a, Message::ExportFormatPicked(AudioFormat::M4a)),
+                    self.seg_btn(AudioFormat::Opus.label(), self.export_opts.format == AudioFormat::Opus, Message::ExportFormatPicked(AudioFormat::Opus)),
+                    self.seg_btn(AudioFormat::Mp3.label(), self.export_opts.format == AudioFormat::Mp3, Message::ExportFormatPicked(AudioFormat::Mp3)),
+                    Space::with_width(Length::Fill),
+                    ar("الصيغة", ui).size(12).color(p.muted),
                 ]
-                .spacing(6),
-            ]
-            .spacing(8)
-            .height(Length::Fill)
-            .into(),
+                .spacing(4)
+                .align_y(alignment::Vertical::Center);
+
+                let br_row = row![
+                    self.seg_btn("128k", self.export_opts.bitrate_kbps == 128, Message::ExportBitratePicked(128)),
+                    self.seg_btn("64k", self.export_opts.bitrate_kbps == 64, Message::ExportBitratePicked(64)),
+                    self.seg_btn("48k", self.export_opts.bitrate_kbps == 48, Message::ExportBitratePicked(48)),
+                    self.seg_btn("32k", self.export_opts.bitrate_kbps == 32, Message::ExportBitratePicked(32)),
+                    self.seg_btn("24k", self.export_opts.bitrate_kbps == 24, Message::ExportBitratePicked(24)),
+                    Space::with_width(Length::Fill),
+                    ar("الجودة", ui).size(12).color(p.muted),
+                ]
+                .spacing(4)
+                .align_y(alignment::Vertical::Center);
+
+                let naming_row = row![
+                    self.seg_btn("001.ext", self.export_opts.naming == NamingMode::AyahOnly, Message::ExportNamingPicked(NamingMode::AyahOnly)),
+                    self.seg_btn("020001.ext", self.export_opts.naming == NamingMode::SurahAyah, Message::ExportNamingPicked(NamingMode::SurahAyah)),
+                    Space::with_width(Length::Fill),
+                    ar("تسمية الآيات", ui).size(12).color(p.muted),
+                ]
+                .spacing(5)
+                .align_y(alignment::Vertical::Center);
+
+                let opts_row = row![
+                    self.rtl_checkbox("تضمين الافتتاح (000)", self.export_opts.include_intro, Message::ExportIntroToggled),
+                    Space::with_width(Length::Fill),
+                    self.rtl_checkbox("صوت أحادي (Mono)", self.export_opts.mono, Message::ExportMonoToggled),
+                ]
+                .align_y(alignment::Vertical::Center);
+
+                let busy = self.ai_running || self.export_running || self.audio_path.is_none();
+                let split_btn = self
+                    .btn_primary(
+                        ar(format!("تقسيم السورة ({ready_count} مقطع)"), ui).size(13),
+                        [10, 14],
+                        if busy || ready_count == 0 {
+                            None
+                        } else {
+                            Some(Message::StartSplitAudio)
+                        },
+                    )
+                    .width(Length::Fill);
+
+                let compress_btn = if busy {
+                    self.btn_primary(ar("ضغط ملف السورة كاملًا", ui).size(12.5), [9, 14], None)
+                        .width(Length::Fill)
+                } else {
+                    self.btn_soft(
+                        ar("ضغط ملف السورة كاملًا", ui).size(12.5),
+                        [9, 14],
+                        Message::StartCompressAudio,
+                    )
+                    .width(Length::Fill)
+                };
+
+                column![
+                    container(
+                        column![
+                            ar("تقسيم القرآن بالآية وضغط الصوت (ffmpeg)", ui).size(13),
+                            ar(
+                                if self.audio_path.is_some() {
+                                    format!("السورة {} · {} آية جاهزة للتصدير", self.surah, ready_count)
+                                } else {
+                                    "حمّل التلاوة أولًا لتفعيل التصدير والضغط.".into()
+                                },
+                                ui,
+                            )
+                            .size(11.5)
+                            .color(p.muted),
+                        ]
+                        .align_x(alignment::Horizontal::Right)
+                        .spacing(4)
+                        .width(Length::Fill)
+                    )
+                    .padding(10)
+                    .style(move |_| container::Style {
+                        background: Some(p.panel2.into()),
+                        border: border::Border {
+                            color: p.line,
+                            width: 1.0,
+                            radius: 9.0.into(),
+                        },
+                        ..Default::default()
+                    }),
+                    fmt_row,
+                    br_row,
+                    naming_row,
+                    opts_row,
+                    Space::with_height(Length::Fill),
+                    split_btn,
+                    compress_btn,
+                ]
+                .spacing(10)
+                .height(Length::Fill)
+                .into()
+            }
         };
 
         let insp_col = self
@@ -2411,6 +2967,9 @@ impl App {
             let bar_pct = ap.pct.unwrap_or(35) as f32;
             let action_btn: Element<'_, Message> = if self.ai_running {
                 self.btn_danger(ar("■ إيقاف", ui).size(11.5), [3, 9], Message::ToggleAiAlign)
+                    .into()
+            } else if self.export_running {
+                self.btn_danger(ar("■ إيقاف", ui).size(11.5), [3, 9], Message::CancelExport)
                     .into()
             } else {
                 self.btn_ghost(text("×").size(12), [3, 8], Message::DismissAiProgress)

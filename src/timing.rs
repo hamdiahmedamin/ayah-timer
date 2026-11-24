@@ -123,6 +123,7 @@ pub fn export_json(
     duration_ms: u64,
     pages: Option<&[Option<u32>]>,
     full: bool,
+    minified: bool,
 ) -> String {
     let rows: Vec<TimelineRow> = build_timeline(starts, count, duration_ms, pages)
         .into_iter()
@@ -145,7 +146,11 @@ pub fn export_json(
                 page: r.page,
             })
             .collect();
-        serde_json::to_string_pretty(&out).unwrap_or_else(|_| "[]".into())
+        if minified {
+            serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
+        } else {
+            serde_json::to_string_pretty(&out).unwrap_or_else(|_| "[]".into())
+        }
     } else {
         let out: Vec<CompactRow> = rows
             .into_iter()
@@ -155,7 +160,11 @@ pub fn export_json(
                 end_time: r.end.unwrap(),
             })
             .collect();
-        serde_json::to_string_pretty(&out).unwrap_or_else(|_| "[]".into())
+        if minified {
+            serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
+        } else {
+            serde_json::to_string_pretty(&out).unwrap_or_else(|_| "[]".into())
+        }
     }
 }
 
@@ -251,5 +260,18 @@ mod tests {
         assert_eq!(s[1], Some(1000));
         assert_eq!(s[2], None);
         assert_eq!(s[3], Some(2000));
+    }
+
+    #[test]
+    fn export_json_minified_and_compact() {
+        let s = vec![Some(0), Some(100), Some(1200)];
+        let pretty = export_json(&s, 2, 2500, None, false, false);
+        let mini = export_json(&s, 2, 2500, None, false, true);
+        assert!(mini.len() < pretty.len());
+        assert!(!mini.contains('\n'));
+        let (parsed, imp, dropped) = import_json(&mini, 2).unwrap();
+        assert_eq!((imp, dropped), (2, 0));
+        assert_eq!(parsed[1], Some(100));
+        assert_eq!(parsed[2], Some(1200));
     }
 }
